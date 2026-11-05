@@ -9,7 +9,7 @@ import {
   findSimilarComplaintsWithDb,
   DuplicateMatch,
 } from '../../config/gemini';
-import { reverseGeocodeLatLng, CityAreaDetails } from '../../utils/helpers';
+import { reverseGeocodeLatLng, forwardGeocodeAddress, CityAreaDetails } from '../../utils/helpers';
 import {
   checkNearbyEmergencyPlaces,
   getEmergencyPriorityLabel,
@@ -50,6 +50,9 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
   const [ward, setWard] = useState('Ward 4A');
   const [cityAreaDetails, setCityAreaDetails] = useState<CityAreaDetails | null>(null);
   const [isResolvingArea, setIsResolvingArea] = useState(false);
+  const [locationMode, setLocationMode] = useState<'gps' | 'manual'>('gps');
+  const [manualAddressInput, setManualAddressInput] = useState('');
+  const [isGeocodingManual, setIsGeocodingManual] = useState(false);
 
   // AI & Duplicate Detection State
   const [aiSummary, setAiSummary] = useState<{
@@ -201,6 +204,30 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
     );
   };
 
+  // Forward geocode manual address for away places
+  const handleManualAddressLookup = async (addressToLookup?: string) => {
+    const query = (addressToLookup ?? manualAddressInput ?? locationAddress).trim();
+    if (!query || query.length < 3) {
+      showToast('Please type an address or landmark first.', 'warning');
+      return;
+    }
+
+    setIsGeocodingManual(true);
+    const result = await forwardGeocodeAddress(query);
+    if (result) {
+      setCoordinates({ lat: result.lat, lng: result.lng });
+      setCityAreaDetails(result.areaDetails);
+      setLocationAddress(query);
+      if (result.areaDetails.ward) setWard(result.areaDetails.ward);
+      setGpsStatus('acquired');
+      showToast(`Location resolved: ${result.areaDetails.neighborhood || result.areaDetails.city}`, 'success');
+    } else {
+      setLocationAddress(query);
+      showToast('Address saved for municipal dispatch.', 'info');
+    }
+    setIsGeocodingManual(false);
+  };
+
   // Live AI Triage & Multi-Factor Proximity Duplicate Detection
   useEffect(() => {
     let isCancelled = false;
@@ -258,7 +285,9 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
       setPhoto(dataUrl);
       setPhotoSource('upload');
       setPhotoFileName(file.name);
-      showToast(`Photo "${file.name}" uploaded successfully`, 'success');
+      setLocationMode('manual');
+      setManualAddressInput(locationAddress);
+      showToast(`Photo "${file.name}" uploaded. You can enter an away address manually below.`, 'info');
     };
     reader.onerror = () => {
       showToast('Could not read image file. Please try again.', 'error');
@@ -281,12 +310,17 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
     }
   };
 
+  const handleOpenLiveCamera = () => {
+    setLocationMode('gps');
+    requestLocation();
+    setIsCameraOpen(true);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!photo) {
-      showToast('Please capture an issue photo. A photo is mandatory.', 'error');
-      setIsCameraOpen(true);
+      showToast('Please attach an issue photo (upload from gallery/PC or use live camera).', 'error');
       return;
     }
 
@@ -568,7 +602,7 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setIsCameraOpen(true)}
+                  onClick={handleOpenLiveCamera}
                   className="px-space-md py-1.5 rounded-lg font-body text-[12px] font-semibold text-on-surface bg-surface-container hover:bg-surface-container-high transition-colors flex items-center gap-1 border border-outline-variant/30 cursor-pointer"
                   title="Take new live camera snapshot"
                 >
@@ -632,7 +666,7 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
 
                 <button
                   type="button"
-                  onClick={() => setIsCameraOpen(true)}
+                  onClick={handleOpenLiveCamera}
                   className="w-full sm:w-auto px-space-lg py-2.5 rounded-lg bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-body text-[13px] font-semibold flex items-center justify-center gap-2 border border-outline-variant/40 shadow-2xs active:scale-95 transition-all cursor-pointer"
                 >
                   <span className="material-symbols-outlined text-[18px]">photo_camera</span>
@@ -721,44 +755,144 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
           </div>
         </section>
 
-        {/* 4. GPS Location & Near City Area Details */}
+        {/* 4. Location & Incident Address (Live GPS or Manual Away Place Entry) */}
         <section className="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm flex flex-col gap-space-sm border border-outline-variant/30">
           <div className="flex items-center justify-between flex-wrap gap-space-xs">
             <div className="flex items-center gap-space-xs">
               <span className="material-symbols-outlined text-secondary text-[20px]">near_me</span>
               <h3 className="font-headline font-semibold text-[16px] text-on-surface">
-                GPS Location &amp; City Area Details
+                Location &amp; Incident Address
               </h3>
             </div>
-            <span className="inline-flex items-center gap-1 px-space-sm py-0.5 rounded-full bg-surface-container text-on-tertiary-container font-body text-[11px] font-semibold">
-              <span className="w-1.5 h-1.5 rounded-full bg-on-tertiary-container"></span>
-              <span>{gpsStatus === 'locating' ? 'Acquiring GPS...' : 'High Accuracy (±3m) • Geotagged'}</span>
-            </span>
+
+            {/* Mode Switcher: Live GPS vs Manual Away Place */}
+            <div className="inline-flex rounded-lg bg-surface-container p-0.5 border border-outline-variant/30">
+              <button
+                type="button"
+                onClick={() => {
+                  setLocationMode('gps');
+                  requestLocation();
+                }}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                  locationMode === 'gps'
+                    ? 'bg-surface-container-lowest text-primary shadow-xs'
+                    : 'text-on-surface-variant hover:text-on-surface'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[14px]">my_location</span>
+                <span>Live GPS (On-Site)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLocationMode('manual');
+                  setManualAddressInput(locationAddress);
+                }}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                  locationMode === 'manual'
+                    ? 'bg-surface-container-lowest text-primary shadow-xs'
+                    : 'text-on-surface-variant hover:text-on-surface'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[14px]">edit_location_alt</span>
+                <span>Away Place (Manual)</span>
+              </button>
+            </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-space-md pt-space-xs">
-            <div className="flex items-center gap-space-sm">
-              <div className="w-8 h-8 rounded-lg bg-surface-container flex items-center justify-center text-on-surface-variant shrink-0">
-                <span className="material-symbols-outlined text-[18px]">location_on</span>
+          {/* Mode 1: Live GPS Display */}
+          {locationMode === 'gps' ? (
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-space-md pt-space-xs">
+              <div className="flex items-center gap-space-sm">
+                <div className="w-8 h-8 rounded-lg bg-surface-container flex items-center justify-center text-on-surface-variant shrink-0">
+                  <span className="material-symbols-outlined text-[18px]">location_on</span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="font-body text-[14px] text-on-surface font-semibold">
+                    {locationAddress}
+                  </span>
+                  <span className="font-body text-[12px] text-on-surface-variant font-mono">
+                    Latitude: {coordinates.lat.toFixed(4)}° N • Longitude: {coordinates.lng.toFixed(4)}° W
+                  </span>
+                </div>
               </div>
-              <div className="flex flex-col">
-                <span className="font-body text-[14px] text-on-surface font-semibold">
-                  {locationAddress}
-                </span>
-                <span className="font-body text-[12px] text-on-surface-variant font-mono">
-                  Latitude: {coordinates.lat.toFixed(4)}° N • Longitude: {coordinates.lng.toFixed(4)}° W
-                </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={requestLocation}
+                  className="px-space-md py-1.5 rounded-lg font-body text-[12px] font-semibold text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center gap-1 border border-outline-variant/30 shrink-0 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[16px]">refresh</span>
+                  <span>Refresh GPS</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLocationMode('manual');
+                    setManualAddressInput(locationAddress);
+                  }}
+                  className="px-space-md py-1.5 rounded-lg font-body text-[12px] font-semibold text-primary hover:bg-primary-container/20 transition-colors flex items-center gap-1 border border-primary/30 shrink-0 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[16px]">edit</span>
+                  <span>Edit Address</span>
+                </button>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={requestLocation}
-              className="px-space-md py-1.5 rounded-lg font-body text-[13px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center gap-1 border border-outline-variant/30 shrink-0"
-            >
-              <span className="material-symbols-outlined text-[16px]">my_location</span>
-              <span>Refresh GPS &amp; Area</span>
-            </button>
-          </div>
+          ) : (
+            /* Mode 2: Manual Address Entry for Away Places */
+            <div className="flex flex-col gap-2 pt-space-xs">
+              <div className="p-2.5 rounded-lg bg-primary-container/20 border border-primary/30 flex items-start gap-2">
+                <span className="material-symbols-outlined text-primary text-[18px] shrink-0 mt-0.5">
+                  info
+                </span>
+                <p className="font-body text-[12px] text-on-surface leading-snug">
+                  <strong>Reporting an Away Location:</strong> Enter the street name, area, or landmark where you took this photo. We'll automatically resolve the municipal ward and map pin.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-center gap-2">
+                <div className="relative flex-1 w-full">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-on-surface-variant text-[18px]">
+                    search
+                  </span>
+                  <input
+                    type="text"
+                    value={manualAddressInput}
+                    onChange={(e) => {
+                      setManualAddressInput(e.target.value);
+                      setLocationAddress(e.target.value);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleManualAddressLookup();
+                      }
+                    }}
+                    placeholder="Enter street, area, or landmark (e.g. Kala Nagar Road, Madhurawada, Visakhapatnam)..."
+                    className="w-full h-10 pl-9 pr-3 bg-surface-container-low rounded-lg text-sm text-on-surface font-medium focus:outline-none focus:ring-2 focus:ring-primary/40 border border-outline-variant/30"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleManualAddressLookup()}
+                  disabled={isGeocodingManual}
+                  className="w-full sm:w-auto px-4 h-10 rounded-lg bg-primary text-on-primary font-body text-[13px] font-semibold flex items-center justify-center gap-1.5 shadow-sm hover:opacity-90 disabled:opacity-50 transition-opacity shrink-0 cursor-pointer"
+                >
+                  {isGeocodingManual ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                      <span>Locating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-[16px]">pin_drop</span>
+                      <span>Update on Map</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Near City Area Details Grid */}
           <div className="pt-space-xs border-t border-surface-container mt-space-xs">
@@ -1100,7 +1234,12 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
       <CameraCaptureModal
         isOpen={isCameraOpen}
         onClose={() => setIsCameraOpen(false)}
-        onCapture={(photoData) => setPhoto(photoData)}
+        onCapture={(photoData) => {
+          setPhoto(photoData);
+          setPhotoSource('camera');
+          setLocationMode('gps');
+          requestLocation();
+        }}
       />
     </div>
   );
