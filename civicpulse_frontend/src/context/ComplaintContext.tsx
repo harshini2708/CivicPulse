@@ -1,7 +1,7 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { Complaint, ComplaintHistoryEntry, Department, RepairEvidence, CitizenFeedback, IssueCategory, PriorityLevel, ComplaintStatus } from '../types';
 import { initialComplaints, initialDepartments } from '../utils/mockData';
-import { generateTrackingId } from '../utils/helpers';
+import { generateTrackingId, calculateDistanceMeters } from '../utils/helpers';
 import { isFirebaseConfigured, db } from '../config/firebase';
 import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
 
@@ -62,6 +62,7 @@ interface ComplaintContextType {
   reopenComplaint: (complaintId: string, reason: string) => void;
   submitFeedback: (complaintId: string, rating: number, comments: string) => void;
   deleteComplaint: (complaintId: string) => Promise<boolean>;
+  mergeDuplicateComplaints: () => number;
 }
 
 const ComplaintContext = createContext<ComplaintContextType | undefined>(undefined);
@@ -333,6 +334,125 @@ export const ComplaintProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return true;
   };
 
+  /**
+   * Auto-Deduplication: Scans all complaints and merges obvious duplicates.
+   * Two complaints are considered duplicates when:
+   *   - Same category
+   *   - Within 200m of each other (or same address)
+   *   - Neither is Resolved
+   * The OLDER complaint is kept; the newer one's confirmations are merged in and it is deleted.
+   * Returns the number of complaints that were merged (removed).
+   */
+  const mergeDuplicateComplaints = useCallback((): number => {
+    let mergedCount = 0;
+
+    setComplaints((prev) => {
+      // Sort by creation date ascending (oldest first) so we keep the oldest
+      const sorted = [...prev].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+
+      const removedIds = new Set<string>();
+      const updatedMap = new Map<string, Complaint>();
+
+      // Initialize map with all complaints
+      for (const c of sorted) {
+        updatedMap.set(c.id, { ...c });
+      }
+
+      for (let i = 0; i < sorted.length; i++) {
+        const kept = sorted[i];
+        if (removedIds.has(kept.id)) continue;
+
+        for (let j = i + 1; j < sorted.length; j++) {
+          const candidate = sorted[j];
+          if (removedIds.has(candidate.id)) continue;
+          if (candidate.status === 'Resolved' || kept.status === 'Resolved') continue;
+
+          // Must be same category
+          if (candidate.category !== kept.category) continue;
+
+          // Check geographic proximity
+          let isDuplicate = false;
+
+          if (
+            kept.location?.latitude && kept.location?.longitude &&
+            candidate.location?.latitude && candidate.location?.longitude
+          ) {
+            const dist = calculateDistanceMeters(
+              kept.location.latitude,
+              kept.location.longitude,
+              candidate.location.latitude,
+              candidate.location.longitude
+            );
+            if (dist <= 200) {
+              isDuplicate = true;
+            }
+          }
+
+          // Also check address string similarity as fallback
+          if (!isDuplicate && kept.location?.address && candidate.location?.address) {
+            const addrA = kept.location.address.toLowerCase();
+            const addrB = candidate.location.address.toLowerCase();
+            // If addresses are identical or one contains the other
+            if (addrA === addrB || addrA.includes(addrB) || addrB.includes(addrA)) {
+              isDuplicate = true;
+            }
+          }
+
+          if (isDuplicate) {
+            // Merge: keep `kept`, absorb `candidate`
+            const keptEntry = updatedMap.get(kept.id)!;
+            keptEntry.citizenConfirmationCount =
+              (keptEntry.citizenConfirmationCount || 1) + Math.max(candidate.citizenConfirmationCount || 1, 1);
+            keptEntry.confirmedByCitizenUids = [
+              ...(keptEntry.confirmedByCitizenUids || []),
+              ...(candidate.confirmedByCitizenUids || []),
+            ];
+            updatedMap.set(kept.id, keptEntry);
+
+            removedIds.add(candidate.id);
+            mergedCount++;
+
+            // Also remove from Firestore
+            if (isFirebaseConfigured && db) {
+              deleteDoc(doc(db, 'complaints', candidate.id)).catch((err) =>
+                console.warn('Failed to delete merged duplicate from Firestore:', err)
+              );
+            }
+          }
+        }
+      }
+
+      if (removedIds.size === 0) return prev; // No changes
+
+      // Also update the kept complaint in Firestore
+      for (const [id, complaint] of updatedMap.entries()) {
+        if (!removedIds.has(id) && isFirebaseConfigured && db) {
+          setDoc(doc(db, 'complaints', id), complaint).catch((err) =>
+            console.warn('Failed to update merged complaint in Firestore:', err)
+          );
+        }
+      }
+
+      return sorted.filter((c) => !removedIds.has(c.id)).map((c) => updatedMap.get(c.id) || c);
+    });
+
+    return mergedCount;
+  }, []);
+
+  // ── Auto-Dedup on initial load ──
+  useEffect(() => {
+    // Small delay to let Firestore data sync first
+    const timer = setTimeout(() => {
+      const count = mergeDuplicateComplaints();
+      if (count > 0) {
+        showToast(`🔄 Auto-merged ${count} duplicate complaint(s).`, 'info');
+      }
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const updateStatus = (complaintId: string, status: ComplaintStatus, note?: string) => {
     setComplaints((prev) =>
       prev.map((item) => {
@@ -504,6 +624,7 @@ export const ComplaintProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         reopenComplaint,
         submitFeedback,
         deleteComplaint,
+        mergeDuplicateComplaints,
       }}
     >
       {children}

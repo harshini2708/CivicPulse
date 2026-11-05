@@ -9,7 +9,7 @@ interface DashboardProps {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ onSelectComplaint, onNavigateTab }) => {
-  const { complaints, deleteComplaint } = useComplaints();
+  const { complaints, deleteComplaint, mergeDuplicateComplaints } = useComplaints();
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const total = complaints.length;
@@ -45,6 +45,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectComplaint, onNavig
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              const count = mergeDuplicateComplaints();
+              // Toast is shown by the function itself if count > 0
+              if (count === 0) {
+                alert('No duplicate complaints found to merge.');
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-secondary/10 hover:bg-secondary/20 rounded-lg border border-secondary/30 text-[12px] font-semibold text-on-secondary-container transition-colors"
+          >
+            <span className="material-symbols-outlined text-[16px]">merge</span>
+            <span>Merge Duplicates</span>
+          </button>
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-container-lowest rounded-lg border border-outline-variant/30 text-[12px] font-semibold text-on-surface">
             <span className="material-symbols-outlined text-[16px] text-secondary">calendar_today</span>
             <span>Today, Nov 2026</span>
