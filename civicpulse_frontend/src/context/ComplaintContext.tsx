@@ -3,7 +3,7 @@ import { Complaint, ComplaintHistoryEntry, Department, RepairEvidence, CitizenFe
 import { initialComplaints, initialDepartments } from '../utils/mockData';
 import { generateTrackingId } from '../utils/helpers';
 import { isFirebaseConfigured, db } from '../config/firebase';
-import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
 
 interface ToastMessage {
   id: string;
@@ -56,6 +56,7 @@ interface ComplaintContextType {
   ) => void;
   reopenComplaint: (complaintId: string, reason: string) => void;
   submitFeedback: (complaintId: string, rating: number, comments: string) => void;
+  deleteComplaint: (complaintId: string) => Promise<boolean>;
 }
 
 const ComplaintContext = createContext<ComplaintContextType | undefined>(undefined);
@@ -66,8 +67,22 @@ const HISTORY_STORAGE_KEY = 'cityresolve_history_v1';
 export const ComplaintProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [complaints, setComplaints] = useState<Complaint[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) return JSON.parse(saved);
+      const saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('civicpulse_complaints_v1');
+      if (saved) {
+        const parsed: Complaint[] = JSON.parse(saved);
+        // Ensure city area details exist on previous complaints as well
+        return parsed.map((c) => ({
+          ...c,
+          location: {
+            ...c.location,
+            city: c.location?.city || 'New York',
+            suburb: c.location?.suburb || 'Lower Manhattan',
+            neighborhood: c.location?.neighborhood || 'Civic Center',
+            state: c.location?.state || 'NY',
+            postcode: c.location?.postcode || '10007',
+          },
+        }));
+      }
     } catch (e) {
       console.warn('Could not load complaints from localStorage', e);
     }
@@ -280,6 +295,34 @@ export const ComplaintProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     showToast(`Complaint updated: assigned to ${departmentName}`, 'success');
   };
 
+  const deleteComplaint = async (complaintId: string): Promise<boolean> => {
+    const target = complaints.find((c) => c.id === complaintId);
+    setComplaints((prev) => prev.filter((item) => item.id !== complaintId));
+
+    if (target) {
+      logHistory(
+        complaintId,
+        'Complaint Purged',
+        target.status,
+        'Deleted',
+        'Administrator',
+        'admin',
+        `Municipal Administrator permanently purged complaint #${target.trackingId}.`
+      );
+    }
+
+    if (isFirebaseConfigured && db) {
+      try {
+        await deleteDoc(doc(db, 'complaints', complaintId));
+      } catch (err) {
+        console.warn('Firebase document delete failed:', err);
+      }
+    }
+
+    showToast(`Complaint #${target?.trackingId || complaintId} permanently removed.`, 'info');
+    return true;
+  };
+
   const updateStatus = (complaintId: string, status: ComplaintStatus, note?: string) => {
     setComplaints((prev) =>
       prev.map((item) => {
@@ -450,6 +493,7 @@ export const ComplaintProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         reviewEvidenceDecision,
         reopenComplaint,
         submitFeedback,
+        deleteComplaint,
       }}
     >
       {children}

@@ -12,10 +12,11 @@ export const ComplaintManagement: React.FC<ComplaintManagementProps> = ({
   selectedComplaint,
   onSelectComplaint,
 }) => {
-  const { complaints, departments, history, assignDepartmentAndWorker, updateStatus } = useComplaints();
+  const { complaints, departments, history, assignDepartmentAndWorker, updateStatus, deleteComplaint } = useComplaints();
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | ComplaintStatus>('All');
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   // Action Controls State
   const [selectedDeptId, setSelectedDeptId] = useState('dpw');
@@ -176,9 +177,22 @@ export const ComplaintManagement: React.FC<ComplaintManagementProps> = ({
 
                   <div className="flex items-center justify-between pt-2 border-t border-surface-container text-[11px] text-on-surface-variant">
                     <span>{formatDate(issue.createdAt).split('•')[0]}</span>
-                    <span className="font-semibold text-secondary">
-                      {issue.assignedDepartmentName || 'Pending Routing'}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-semibold text-secondary">
+                        {issue.assignedDepartmentName || 'Pending Routing'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteConfirmId(issue.id);
+                        }}
+                        className="p-1 rounded hover:bg-error-container text-on-surface-variant hover:text-error transition-colors"
+                        title="Delete complaint (Admin Only)"
+                      >
+                        <span className="material-symbols-outlined text-[15px]">delete</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               </article>
@@ -206,9 +220,20 @@ export const ComplaintManagement: React.FC<ComplaintManagementProps> = ({
                     </span>
                   )}
                 </div>
-                <div className="text-[12px] text-on-surface-variant flex items-center gap-1">
-                  <span className="material-symbols-outlined text-[15px]">schedule</span>
-                  <span>Submitted {formatDate(activeIssue.createdAt)}</span>
+                <div className="flex items-center gap-2.5">
+                  <div className="text-[12px] text-on-surface-variant flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[15px]">schedule</span>
+                    <span>Submitted {formatDate(activeIssue.createdAt)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteConfirmId(activeIssue.id)}
+                    className="px-2.5 py-1 rounded-lg bg-error-container/40 hover:bg-error text-error hover:text-white transition-all text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                    title="Permanently delete this complaint (Admin Only)"
+                  >
+                    <span className="material-symbols-outlined text-[15px]">delete</span>
+                    <span>Delete</span>
+                  </button>
                 </div>
               </div>
 
@@ -433,6 +458,44 @@ export const ComplaintManagement: React.FC<ComplaintManagementProps> = ({
           </section>
         )}
       </div>
+
+      {/* Admin Delete Confirmation Modal */}
+      {deleteConfirmId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-primary/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-surface-container-lowest rounded-xl max-w-sm w-full p-space-lg shadow-2xl border border-outline-variant/40 flex flex-col gap-space-md text-left">
+            <div className="flex items-center gap-2 text-error">
+              <span className="material-symbols-outlined text-[24px]">warning</span>
+              <h3 className="font-headline font-bold text-[18px] text-on-surface">Delete Complaint Record?</h3>
+            </div>
+            <p className="font-body text-[13px] text-on-surface-variant leading-relaxed">
+              Are you sure you want to permanently purge this complaint from the municipal ledger? This administrative action is irreversible and applies across all records.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-surface-container">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmId(null)}
+                className="px-3.5 py-1.5 rounded-lg text-[13px] font-medium text-on-surface hover:bg-surface-container transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const idToDelete = deleteConfirmId;
+                  setDeleteConfirmId(null);
+                  await deleteComplaint(idToDelete);
+                  const nextComplaint = complaints.find((c) => c.id !== idToDelete) || null;
+                  onSelectComplaint(nextComplaint);
+                }}
+                className="px-4 py-1.5 rounded-lg bg-error text-white text-[13px] font-semibold hover:opacity-90 shadow-sm transition-opacity flex items-center gap-1.5 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[16px]">delete</span>
+                <span>Confirm Delete</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

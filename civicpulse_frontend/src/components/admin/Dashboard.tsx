@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useComplaints } from '../../context/ComplaintContext';
 import { Complaint } from '../../types';
 import { formatRelativeTime } from '../../utils/helpers';
@@ -9,7 +9,8 @@ interface DashboardProps {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ onSelectComplaint, onNavigateTab }) => {
-  const { complaints } = useComplaints();
+  const { complaints, deleteComplaint } = useComplaints();
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const total = complaints.length;
   const pending = complaints.filter((c) => c.status === 'Pending').length;
@@ -195,21 +196,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectComplaint, onNavig
                   </div>
                 </div>
 
-                <div className="flex flex-col items-end shrink-0 gap-1">
-                  <span
-                    className={`px-2 py-0.5 rounded-full font-body text-[11px] font-semibold ${
-                      issue.priority === 'Urgent'
-                        ? 'bg-error-container text-on-error-container'
-                        : issue.status === 'Resolved'
-                        ? 'bg-tertiary-fixed/30 text-on-tertiary-container'
-                        : 'bg-surface-container-high text-on-surface'
-                    }`}
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-col items-end gap-1">
+                    <span
+                      className={`px-2 py-0.5 rounded-full font-body text-[11px] font-semibold ${
+                        issue.priority === 'Urgent'
+                          ? 'bg-error-container text-on-error-container'
+                          : issue.status === 'Resolved'
+                          ? 'bg-tertiary-fixed/30 text-on-tertiary-container'
+                          : 'bg-surface-container-high text-on-surface'
+                      }`}
+                    >
+                      {issue.status}
+                    </span>
+                    <span className="font-body text-[10px] text-on-surface-variant">
+                      {formatRelativeTime(issue.createdAt)}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteConfirmId(issue.id);
+                    }}
+                    className="p-1.5 rounded-lg hover:bg-error-container text-on-surface-variant hover:text-error transition-colors"
+                    title="Delete complaint (Admin Only)"
                   >
-                    {issue.status}
-                  </span>
-                  <span className="font-body text-[10px] text-on-surface-variant">
-                    {formatRelativeTime(issue.createdAt)}
-                  </span>
+                    <span className="material-symbols-outlined text-[17px]">delete</span>
+                  </button>
                 </div>
               </div>
             ))}
@@ -251,6 +265,42 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectComplaint, onNavig
           </div>
         </section>
       </div>
+
+      {/* Admin Delete Confirmation Modal */}
+      {deleteConfirmId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-primary/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-surface-container-lowest rounded-xl max-w-sm w-full p-space-lg shadow-2xl border border-outline-variant/40 flex flex-col gap-space-md text-left">
+            <div className="flex items-center gap-2 text-error">
+              <span className="material-symbols-outlined text-[24px]">warning</span>
+              <h3 className="font-headline font-bold text-[18px] text-on-surface">Delete Complaint?</h3>
+            </div>
+            <p className="font-body text-[13px] text-on-surface-variant leading-relaxed">
+              Are you sure you want to permanently delete this complaint from the municipal ledger? This administrative action is irreversible.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-surface-container">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmId(null)}
+                className="px-3.5 py-1.5 rounded-lg text-[13px] font-medium text-on-surface hover:bg-surface-container transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const idToDelete = deleteConfirmId;
+                  setDeleteConfirmId(null);
+                  await deleteComplaint(idToDelete);
+                }}
+                className="px-4 py-1.5 rounded-lg bg-error text-white text-[13px] font-semibold hover:opacity-90 shadow-sm transition-opacity flex items-center gap-1.5 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[16px]">delete</span>
+                <span>Confirm Delete</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

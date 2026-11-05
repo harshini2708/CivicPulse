@@ -45,8 +45,8 @@ export const LandingPage: React.FC = () => {
         <div className="h-16 max-w-[1340px] mx-auto px-margin flex items-center justify-between gap-gutter">
           <div className="flex items-center gap-space-md">
             <div className="flex items-center gap-space-sm">
-              <div className="w-8 h-8 rounded-lg bg-primary-container flex items-center justify-center text-tertiary-fixed shadow-sm">
-                <span className="material-symbols-outlined text-[20px]">account_balance</span>
+              <div className="w-9 h-9 rounded-lg overflow-hidden bg-white flex items-center justify-center shadow-xs border border-outline-variant/30">
+                <img src="/logo.png" alt="CityResolve Logo" className="w-full h-full object-contain p-0.5" />
               </div>
               <span className="font-headline text-headline-sm font-bold tracking-tight text-on-surface">
                 CityResolve
@@ -94,8 +94,8 @@ export const LandingPage: React.FC = () => {
             </div>
 
             {/* Official Emblem */}
-            <div className="relative z-10 w-20 h-20 rounded-2xl bg-primary-container text-tertiary-fixed flex items-center justify-center p-3 shadow-md mb-space-sm">
-              <span className="material-symbols-outlined text-[44px]">shield</span>
+            <div className="relative z-10 w-24 h-24 rounded-2xl bg-white p-2 shadow-lg border border-outline-variant/30 mb-space-sm overflow-hidden flex items-center justify-center">
+              <img src="/logo.png" alt="CityResolve Emblem" className="w-full h-full object-contain" />
             </div>
 
             {/* Tagline */}

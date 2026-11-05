@@ -35,8 +35,8 @@ export const AdminPortal: React.FC = () => {
               onClick={() => setPortalMode('landing')}
               className="flex items-center gap-space-sm text-left group"
             >
-              <div className="w-8 h-8 rounded-lg bg-primary-container flex items-center justify-center text-tertiary-fixed shadow-sm">
-                <span className="material-symbols-outlined text-[20px]">account_balance</span>
+              <div className="w-9 h-9 rounded-lg overflow-hidden bg-white flex items-center justify-center shadow-xs border border-outline-variant/30">
+                <img src="/logo.png" alt="CityResolve Logo" className="w-full h-full object-contain p-0.5" />
               </div>
               <span className="font-headline text-headline-sm font-bold text-on-surface tracking-tight">
                 CityResolve
