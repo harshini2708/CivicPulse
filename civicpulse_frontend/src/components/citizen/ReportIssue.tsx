@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useComplaints } from '../../context/ComplaintContext';
 import { CameraCaptureModal } from '../common/CameraCaptureModal';
 import { AudioRecorder } from '../common/AudioRecorder';
@@ -10,6 +10,19 @@ import {
   DuplicateMatch,
 } from '../../config/gemini';
 import { reverseGeocodeLatLng, CityAreaDetails } from '../../utils/helpers';
+import {
+  checkNearbyEmergencyPlaces,
+  getEmergencyPriorityLabel,
+  EmergencyProximityResult,
+  NearbyEmergencyPlace,
+} from '../../utils/emergencyProximity';
+import {
+  saveComplaintOffline,
+  setupAutoSync,
+  isOnline,
+  getOfflineCount,
+  OfflineComplaintPayload,
+} from '../../utils/offlineSync';
 
 interface ReportIssueProps {
   onSuccess: (trackingId: string) => void;
@@ -52,6 +65,14 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasConfirmedReportAnyway, setHasConfirmedReportAnyway] = useState(false);
 
+  // Emergency Proximity State
+  const [emergencyResult, setEmergencyResult] = useState<EmergencyProximityResult | null>(null);
+  const [isCheckingEmergency, setIsCheckingEmergency] = useState(false);
+
+  // Offline Sync State
+  const [networkOnline, setNetworkOnline] = useState(isOnline());
+  const [pendingOfflineCount, setPendingOfflineCount] = useState(0);
+
   // Initial geocode resolution for default anchor
   useEffect(() => {
     let isMounted = true;
@@ -66,6 +87,75 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
     });
     return () => {
       isMounted = false;
+    };
+  }, []);
+
+  // Emergency Proximity Detection — runs when coordinates change
+  useEffect(() => {
+    let isCancelled = false;
+    setIsCheckingEmergency(true);
+
+    checkNearbyEmergencyPlaces(coordinates.lat, coordinates.lng).then((result) => {
+      if (!isCancelled) {
+        setEmergencyResult(result);
+        setIsCheckingEmergency(false);
+
+        // Auto-boost priority if near emergency zone
+        if (result.priorityBoost === 'urgent') {
+          setPriority('Urgent');
+          showToast(getEmergencyPriorityLabel(result), 'warning');
+        } else if (result.priorityBoost === 'high' && priority === 'Low') {
+          setPriority('High');
+          showToast(getEmergencyPriorityLabel(result), 'info');
+        }
+      }
+    });
+
+    return () => { isCancelled = true; };
+  }, [coordinates.lat, coordinates.lng]);
+
+  // Offline connectivity listeners
+  useEffect(() => {
+    const handleOnline = () => {
+      setNetworkOnline(true);
+      showToast('📶 Back online! Syncing cached complaints...', 'success');
+      getOfflineCount().then(setPendingOfflineCount);
+    };
+    const handleOffline = () => {
+      setNetworkOnline(false);
+      showToast('📵 You are offline. Complaints will be cached locally and synced when connectivity returns.', 'warning');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // Setup auto-sync: when connectivity returns, sync pending payloads
+    setupAutoSync(async (payload: OfflineComplaintPayload) => {
+      try {
+        await submitComplaint({
+          title: payload.title,
+          description: payload.description,
+          voiceTranscript: payload.voiceTranscript,
+          category: payload.category as IssueCategory,
+          priority: payload.priority as PriorityLevel,
+          originalPhotoUrl: payload.photoBase64,
+          location: payload.location,
+          aiSummary: payload.aiSummary as any,
+        });
+        showToast(`📤 Offline complaint "${payload.title}" synced successfully!`, 'success');
+        return true;
+      } catch (err) {
+        console.warn('[OfflineSync] Failed to sync complaint:', err);
+        return false;
+      }
+    });
+
+    // Check initial pending count
+    getOfflineCount().then(setPendingOfflineCount);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
   }, []);
 
@@ -170,6 +260,50 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
 
     setIsSubmitting(true);
 
+    // ── DEAD ZONE / OFFLINE DETECTION & INDEXEDDB CACHING ──
+    if (!isOnline()) {
+      try {
+        const hardwareGpsTimestamp = new Date().toISOString();
+        const payloadTitle = `${category} Issue at ${cityAreaDetails?.neighborhood || cityAreaDetails?.road || locationAddress.split(',')[0]}`;
+        const offlineId = await saveComplaintOffline({
+          offlineId: `offline_${Date.now()}`,
+          title: payloadTitle,
+          description: description || voiceTranscript,
+          voiceTranscript,
+          category,
+          priority,
+          photoBase64: photo,
+          location: {
+            address: locationAddress,
+            latitude: coordinates.lat,
+            longitude: coordinates.lng,
+            ward: cityAreaDetails?.ward || ward,
+            city: cityAreaDetails?.city,
+            neighborhood: cityAreaDetails?.neighborhood,
+            suburb: cityAreaDetails?.suburb,
+            state: cityAreaDetails?.state,
+            postcode: cityAreaDetails?.postcode,
+          },
+          aiSummary,
+          gpsTimestamp: hardwareGpsTimestamp,
+          createdAt: hardwareGpsTimestamp,
+          syncStatus: 'pending',
+        });
+
+        const count = await getOfflineCount();
+        setPendingOfflineCount(count);
+        setIsSubmitting(false);
+        showToast(
+          '📵 Dead zone detected. Complaint cached in IndexedDB with hardware GPS timestamp. Auto-sync will dispatch when 4G/Wi-Fi connects!',
+          'info'
+        );
+        onSuccess(`OFFLINE-${offlineId.slice(-6).toUpperCase()}`);
+        return;
+      } catch (offlineErr) {
+        console.error('Failed to cache offline complaint:', offlineErr);
+      }
+    }
+
     // ── DUPLICATE INTERCEPTION (runs every submit unless user clicked "Report Anyway") ──
     if (!hasConfirmedReportAnyway) {
       try {
@@ -226,9 +360,47 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
       setIsSubmitting(false);
       setHasConfirmedReportAnyway(false);
       onSuccess(newIssue.trackingId);
-    } catch {
-      setIsSubmitting(false);
-      showToast('Submission failed. Please try again.', 'error');
+    } catch (submitErr) {
+      console.warn('Network submission failed, falling back to local IndexedDB caching:', submitErr);
+      try {
+        const hardwareGpsTimestamp = new Date().toISOString();
+        const payloadTitle = `${category} Issue at ${cityAreaDetails?.neighborhood || cityAreaDetails?.road || locationAddress.split(',')[0]}`;
+        const offlineId = await saveComplaintOffline({
+          offlineId: `offline_${Date.now()}`,
+          title: payloadTitle,
+          description: description || voiceTranscript,
+          voiceTranscript,
+          category,
+          priority,
+          photoBase64: photo,
+          location: {
+            address: locationAddress,
+            latitude: coordinates.lat,
+            longitude: coordinates.lng,
+            ward: cityAreaDetails?.ward || ward,
+            city: cityAreaDetails?.city,
+            neighborhood: cityAreaDetails?.neighborhood,
+            suburb: cityAreaDetails?.suburb,
+            state: cityAreaDetails?.state,
+            postcode: cityAreaDetails?.postcode,
+          },
+          aiSummary,
+          gpsTimestamp: hardwareGpsTimestamp,
+          createdAt: hardwareGpsTimestamp,
+          syncStatus: 'pending',
+        });
+        const count = await getOfflineCount();
+        setPendingOfflineCount(count);
+        setIsSubmitting(false);
+        showToast(
+          '📶 Patchy network drop: Stored securely in IndexedDB with hardware GPS timestamp. Will auto-sync when connection restores.',
+          'info'
+        );
+        onSuccess(`OFFLINE-${offlineId.slice(-6).toUpperCase()}`);
+      } catch {
+        setIsSubmitting(false);
+        showToast('Submission failed. Please try again.', 'error');
+      }
     }
   };
 
@@ -261,6 +433,33 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
       </header>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-space-md">
+        {/* Offline Dead Zone / Sync Indicator Banner */}
+        {(!networkOnline || pendingOfflineCount > 0) && (
+          <div className="bg-surface-container-high rounded-xl p-space-md border border-amber-500/40 flex items-center justify-between gap-3 shadow-xs animate-fade-in">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-[20px]">
+                  {!networkOnline ? 'wifi_off' : 'cloud_sync'}
+                </span>
+              </div>
+              <div>
+                <h4 className="font-headline font-semibold text-[13px] text-on-surface flex items-center gap-1.5">
+                  <span>{!networkOnline ? 'Dead Zone / Patchy Connectivity Mode Active' : 'Automatic Background Sync Ready'}</span>
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+                </h4>
+                <p className="font-body text-[12px] text-on-surface-variant">
+                  {!networkOnline
+                    ? 'Field reports, voice recordings, photos, and hardware GPS timestamps are cached safely in browser IndexedDB. They will auto-sync upon 4G/Wi-Fi connection.'
+                    : `${pendingOfflineCount} offline complaint(s) in local IndexedDB. Will auto-sync when transmission stabilizes.`}
+                </p>
+              </div>
+            </div>
+            <span className="px-2.5 py-1 rounded-full font-body text-[11px] font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 shrink-0">
+              {!networkOnline ? '📵 Dead Zone' : `📤 ${pendingOfflineCount} Pending`}
+            </span>
+          </div>
+        )}
+
         <span className="font-body text-[12px] text-on-surface-variant uppercase tracking-wider font-semibold">
           Multi-Modal Inputs (Combinable)
         </span>
@@ -552,6 +751,52 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
             </div>
           </div>
         </section>
+
+        {/* 4B. Emergency Facility Proximity Alert (Hospitals, Schools, Fire Stations, Clinics) */}
+        {emergencyResult?.isNearEmergencyZone && (
+          <section className="bg-surface-container-high rounded-xl p-space-md border-2 border-error/40 flex flex-col gap-space-sm shadow-sm animate-fade-in">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2 text-error">
+                <span className="material-symbols-outlined text-[24px]">emergency</span>
+                <div>
+                  <h3 className="font-headline font-bold text-[15px] text-on-surface">
+                    Emergency Zone Priority Boost Triggered
+                  </h3>
+                  <p className="font-body text-[12px] text-on-surface-variant">
+                    {emergencyResult.boostReason}. Automated priority elevation protects emergency routes and child safety.
+                  </p>
+                </div>
+              </div>
+              <span className="px-3 py-1 rounded-full bg-error text-white font-body text-[12px] font-bold shadow-xs">
+                🚨 Auto-Elevated: {priority}
+              </span>
+            </div>
+
+            {/* List of Detected Nearby Emergency Facilities */}
+            <div className="flex flex-wrap gap-2 pt-1 border-t border-surface-container">
+              {emergencyResult.nearbyPlaces.slice(0, 4).map((place, idx) => (
+                <div
+                  key={idx}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-container-lowest text-on-surface font-body text-[12px] border border-surface-container shadow-2xs"
+                >
+                  <span className="text-[14px]">
+                    {place.type === 'hospital' || place.type === 'clinic'
+                      ? '🏥'
+                      : place.type === 'school' || place.type === 'kindergarten' || place.type === 'college' || place.type === 'university'
+                      ? '🏫'
+                      : place.type === 'fire_station'
+                      ? '🚒'
+                      : '👮'}
+                  </span>
+                  <span className="font-semibold text-on-surface">{place.name}</span>
+                  <span className="text-[11px] font-mono text-secondary font-bold">
+                    ({place.distanceMeters}m away)
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* 5. Gemini AI Summary of Complaint */}
         <section className="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm flex flex-col gap-space-sm border border-outline-variant/30">

@@ -4,45 +4,73 @@ interface AudioRecorderProps {
   onTranscriptionComplete: (transcript: string) => void;
 }
 
+type VoiceLang = 'en-US' | 'te-IN' | 'hi-IN';
+
+const VOICE_LANGUAGES: { code: VoiceLang; label: string; flag: string }[] = [
+  { code: 'en-US', label: 'English', flag: '🇺🇸' },
+  { code: 'te-IN', label: 'తెలుగు (Telugu)', flag: '🇮🇳' },
+  { code: 'hi-IN', label: 'हिन्दी (Hindi)', flag: '🇮🇳' },
+];
+
 export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onTranscriptionComplete }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [recordedTime, setRecordedTime] = useState(0);
   const [hasRecording, setHasRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState('');
+  const [selectedLang, setSelectedLang] = useState<VoiceLang>('en-US');
+  const [showLangPicker, setShowLangPicker] = useState(false);
 
   const recognitionRef = useRef<any>(null);
   const timerRef = useRef<number | null>(null);
 
+  // Initialize or reinitialize speech recognition when language changes
   useEffect(() => {
-    // Check for Web Speech API
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (SpeechRecognition) {
+      // Stop any existing recognition
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch {}
+      }
+
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = 'en-US';
+      recognition.lang = selectedLang;
+      recognition.maxAlternatives = 1;
 
       recognition.onresult = (event: any) => {
-        let transcript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          transcript += event.results[i][0].transcript;
+        let interim = '';
+        let final = '';
+        for (let i = 0; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (result.isFinal) {
+            final += result[0].transcript + ' ';
+          } else {
+            interim += result[0].transcript;
+          }
         }
+        const transcript = (final + interim).trim();
         setLiveTranscript(transcript);
         onTranscriptionComplete(transcript);
       };
 
       recognition.onerror = (event: any) => {
-        console.warn('[AudioRecorder] Speech recognition event:', event.error);
+        console.warn('[AudioRecorder] Speech recognition error:', event.error);
         if (event.error === 'not-allowed') {
           setIsRecording(false);
         }
       };
 
       recognition.onend = () => {
-        setIsRecording(false);
+        // Auto-restart if still recording (handles Chrome's ~60s timeout)
+        if (isRecording && recognitionRef.current) {
+          try { recognitionRef.current.start(); } catch {}
+        } else {
+          setIsRecording(false);
+        }
       };
 
       recognitionRef.current = recognition;
@@ -51,12 +79,10 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onTranscriptionCom
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
       if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch {}
+        try { recognitionRef.current.stop(); } catch {}
       }
     };
-  }, []);
+  }, [selectedLang]);
 
   const startRecording = () => {
     setRecordedTime(0);
@@ -75,12 +101,13 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onTranscriptionCom
       });
     }, 1000);
 
-    // Start speech recognition
+    // Start speech recognition with selected language
     if (recognitionRef.current) {
       try {
+        recognitionRef.current.lang = selectedLang;
         recognitionRef.current.start();
       } catch (err) {
-        console.warn('Speech recognition start failed, using timer simulation:', err);
+        console.warn('Speech recognition start failed:', err);
       }
     }
   };
@@ -94,9 +121,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onTranscriptionCom
     setHasRecording(true);
 
     if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch {}
+      try { recognitionRef.current.stop(); } catch {}
     }
   };
 
@@ -125,6 +150,8 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onTranscriptionCom
     return `${mins}:${s < 10 ? '0' : ''}${s}`;
   };
 
+  const currentLangInfo = VOICE_LANGUAGES.find((l) => l.code === selectedLang) || VOICE_LANGUAGES[0];
+
   return (
     <section className="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm flex flex-col gap-space-md border border-outline-variant/30">
       <div className="flex items-center justify-between">
@@ -137,7 +164,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onTranscriptionCom
               Voice – Record your complaint
             </h2>
             <p className="font-body text-[12px] text-on-surface-variant">
-              Speak naturally; voice input is auto-transcribed for department dispatch.
+              Speak in English, తెలుగు (Telugu), or हिन्दी (Hindi). Auto-transcribed for dispatch.
             </p>
           </div>
         </div>
@@ -152,6 +179,57 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onTranscriptionCom
         >
           {isRecording ? 'Recording Live...' : hasRecording ? 'Audio Recorded' : 'Ready to Record'}
         </span>
+      </div>
+
+      {/* Language Selector */}
+      <div className="flex items-center gap-space-sm flex-wrap">
+        <span className="font-body text-[12px] text-on-surface-variant font-semibold uppercase tracking-wider">
+          Voice Language:
+        </span>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setShowLangPicker(!showLangPicker)}
+            disabled={isRecording}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface font-body text-[13px] font-semibold border border-outline-variant/40 transition-colors disabled:opacity-50"
+          >
+            <span>{currentLangInfo.flag}</span>
+            <span>{currentLangInfo.label}</span>
+            <span className="material-symbols-outlined text-[16px] text-on-surface-variant">
+              {showLangPicker ? 'expand_less' : 'expand_more'}
+            </span>
+          </button>
+          {showLangPicker && (
+            <div className="absolute top-full left-0 mt-1 bg-surface-container-lowest rounded-lg shadow-lg border border-outline-variant/30 z-20 min-w-[180px] overflow-hidden">
+              {VOICE_LANGUAGES.map((lang) => (
+                <button
+                  key={lang.code}
+                  type="button"
+                  onClick={() => {
+                    setSelectedLang(lang.code);
+                    setShowLangPicker(false);
+                  }}
+                  className={`w-full flex items-center gap-2 px-3 py-2 font-body text-[13px] hover:bg-surface-container transition-colors text-left ${
+                    selectedLang === lang.code
+                      ? 'bg-primary-container/30 text-primary font-semibold'
+                      : 'text-on-surface'
+                  }`}
+                >
+                  <span>{lang.flag}</span>
+                  <span>{lang.label}</span>
+                  {selectedLang === lang.code && (
+                    <span className="material-symbols-outlined text-[16px] text-primary ml-auto">check</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {selectedLang !== 'en-US' && (
+          <span className="px-2 py-0.5 rounded-full bg-secondary-container/50 text-on-secondary-container font-body text-[11px] font-medium">
+            {selectedLang === 'te-IN' ? 'తెలుగు mode active' : 'हिन्दी mode active'}
+          </span>
+        )}
       </div>
 
       <div className="bg-surface-container-low rounded-lg p-space-md flex flex-col sm:flex-row items-center justify-between gap-space-md">
@@ -191,10 +269,10 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onTranscriptionCom
             <div className="flex items-center justify-between font-body text-[12px] text-on-surface-variant">
               <span className="text-on-surface font-semibold">
                 {isRecording
-                  ? `Recording... ${formatSeconds(recordedTime)}`
+                  ? `Recording in ${currentLangInfo.label}... ${formatSeconds(recordedTime)}`
                   : hasRecording
                   ? `${formatSeconds(recordedTime)} recorded • Audio clear`
-                  : 'Click mic to speak'}
+                  : `Click mic to speak in ${currentLangInfo.label}`}
               </span>
               <span>{formatSeconds(recordedTime)} / 1:00</span>
             </div>
@@ -253,7 +331,9 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onTranscriptionCom
             transcribe
           </span>
           <div className="flex-1">
-            <span className="font-semibold text-on-surface-variant">Live Transcription: </span>
+            <span className="font-semibold text-on-surface-variant">
+              Live Transcription ({currentLangInfo.label}):{' '}
+            </span>
             <span>"{liveTranscript}"</span>
           </div>
         </div>
