@@ -1,0 +1,93 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasRole(role) {
+      return isAuthenticated() && getUserData().role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function isWorker() {
+      return hasRole('worker');
+    }
+
+    function isCitizen() {
+      return hasRole('citizen');
+    }
+
+    // 1. Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      // Only admins can create/update user roles; users can update their own profile name
+      allow write: if isAdmin() || (isAuthenticated() && request.auth.uid == userId && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'accountStatus']));
+    }
+
+    // 2. Complaints collection
+    match /complaints/{complaintId} {
+      // Anyone can read complaints for Nearby Issues discovery
+      allow read: if true;
+
+      // Authenticated or guest citizens can create complaints
+      allow create: if request.resource.data.title is string
+                    && request.resource.data.category in ['Roads', 'Garbage', 'Water Supply', 'Drainage', 'Streetlights', 'Other']
+                    && request.resource.data.status == 'Pending'
+                    && request.resource.data.originalPhotoUrl is string;
+
+      // Citizens can confirm existing issues (increment count)
+      allow update: if (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['citizenConfirmationCount', 'confirmedByCitizenUids']))
+                    || isAdmin()
+                    // Workers can update assigned complaints to In Progress or Evidence Submitted
+                    || (isWorker() && resource.data.assignedWorkerId == request.auth.uid
+                        && request.resource.data.status in ['In Progress', 'Evidence Submitted']
+                        // Worker CANNOT set status to Resolved!
+                        && request.resource.data.status != 'Resolved')
+                    // Citizen can reopen their own resolved complaint
+                    || (isAuthenticated() && resource.data.citizenId == request.auth.uid
+                        && request.resource.data.status == 'Reopened');
+
+      allow delete: if isAdmin();
+    }
+
+    // 3. Repair Evidence collection (Core Security Check)
+    match /repairEvidence/{evidenceId} {
+      allow read: if isAuthenticated();
+
+      // Only assigned workers can submit evidence; workers CANNOT approve their own work!
+      allow create: if isWorker()
+                    && request.resource.data.workerId == request.auth.uid
+                    && request.resource.data.afterPhotoUrl is string
+                    && request.resource.data.adminDecision == 'Pending';
+
+      // ONLY authorized municipal admins can update the admin decision (Approve/Reject)
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // 4. Complaint History collection (Immutable audit log)
+    match /complaintHistory/{historyId} {
+      allow read: if isAuthenticated();
+      // Appending to audit trail is permitted for authenticated actors
+      allow create: if isAuthenticated();
+      allow update, delete: if false; // Append-only immutable log
+    }
+
+    // 5. Citizen Feedback
+    match /feedback/{feedbackId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+  }
+}

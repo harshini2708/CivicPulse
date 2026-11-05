@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: civicpulse-backend
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: GEMINI_API_KEY
+        value: AQ.Ab8RN6LGIA6CwpEyDaNP0daNY2hqBpLpWTl-DxkSS3QnQINMdg
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000

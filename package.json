@@ -1,0 +1,10 @@
+{
+  "name": "civicpulse-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "cd civicpulse_frontend && npm run dev",
+    "build": "cd civicpulse_frontend && npm run build",
+    "preview": "cd civicpulse_frontend && npm run preview"
+  }
+}

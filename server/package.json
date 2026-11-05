@@ -1,0 +1,17 @@
+{
+  "name": "civicpulse-backend",
+  "version": "1.0.0",
+  "description": "CivicPulse Secure Server API & AI Services",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  }
+}
