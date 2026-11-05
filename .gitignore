@@ -1,0 +1,49 @@
+# ===========================
+# CivicPulse — Root .gitignore
+# ===========================
+
+# Environment files — NEVER commit these
+.env
+.env.local
+.env.*.local
+*.env
+
+# Node modules
+node_modules/
+
+# Portable Node.js runtime (downloaded locally, not needed in repo)
+nodejs/
+
+# Large zip / archive files
+*.zip
+*.tar
+*.tar.gz
+*.rar
+
+# Stitch design exports (not needed in repo)
+stitch_civicpulse_portal_landing_page/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor folders
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp
+
+# Batch helper scripts (local dev only)
+run_npm.bat
+run_server_npm.bat
+.env
