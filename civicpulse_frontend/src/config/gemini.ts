@@ -158,20 +158,40 @@ const COMMON_STREET_NAMES = [
 ];
 
 /**
- * 2. Multi-Factor AI & Proximity Duplicate Detection
- * Analyzes:
- *  - High-precision geographic proximity (Haversine formula)
- *  - Issue category matching & cross-category domain synonyms
- *  - Text token overlap and common street/location references
+ * 2. Multi-Factor AI & Proximity Duplicate Detection (Optimized)
+ *
+ * Scoring factors (max ~130 raw → capped at 98):
+ *  - Geographic proximity via Haversine           (up to 50 pts)
+ *  - Category match                               (up to 25 pts)
+ *  - Address token overlap                        (up to 40 pts)  ← NEW
+ *  - Domain keyword semantic matching             (up to 20 pts)
+ *  - Street / corridor reference                  (up to 15 pts)
+ *  - Description token Jaccard overlap            (up to 20 pts)
+ *  - Hard-floor boosts for obvious duplicates
  */
 export function findSimilarComplaints(
   newDescription: string,
   newCategory: IssueCategory,
   existingComplaints: Complaint[],
-  newCoordinates?: { lat: number; lng: number }
+  newCoordinates?: { lat: number; lng: number },
+  newAddress?: string
 ): DuplicateMatch[] {
-  const descLower = (newDescription || '').toLowerCase();
-  const descTokens = descLower.split(/\W+/).filter((w) => w.length >= 3);
+  // Combine description + address for full-text comparison
+  const fullInputLower = `${newDescription || ''} ${newAddress || ''}`.toLowerCase();
+  const fullInputTokens = fullInputLower
+    .split(/[\W_]+/)
+    .filter((w) => w.length >= 3);
+  // Also keep a set of meaningful address tokens (≥3 chars, not stopwords)
+  const ADDRESS_STOPWORDS = new Set([
+    'the', 'and', 'road', 'street', 'lane', 'nagar', 'colony', 'area',
+    'near', 'opp', 'opposite', 'behind', 'beside', 'next', 'towards',
+    'india', 'andhra', 'pradesh', 'telangana', 'karnataka', 'tamil', 'nadu',
+  ]);
+  const newAddressLower = (newAddress || '').toLowerCase();
+  const newAddressTokens = newAddressLower
+    .split(/[\W_]+/)
+    .filter((w) => w.length >= 3 && !ADDRESS_STOPWORDS.has(w));
+
   const results: DuplicateMatch[] = [];
 
   for (const item of existingComplaints) {
@@ -181,7 +201,7 @@ export function findSimilarComplaints(
     const reasons: string[] = [];
     let distMeters: number | undefined;
 
-    // 1. Geographic Proximity (Up to 45 points)
+    // ── 1. Geographic Proximity (up to 50 pts) ──────────────────────
     if (
       newCoordinates &&
       typeof newCoordinates.lat === 'number' &&
@@ -197,26 +217,29 @@ export function findSimilarComplaints(
         item.location.longitude
       );
 
-      if (distMeters <= 35) {
+      if (distMeters <= 20) {
+        score += 50;
+        reasons.push(`📍 Identical Location (${distMeters}m away)`);
+      } else if (distMeters <= 50) {
         score += 45;
-        reasons.push(`📍 Spot Proximity: Exact location (${distMeters}m away)`);
+        reasons.push(`📍 Spot Proximity: Same spot (${distMeters}m away)`);
       } else if (distMeters <= 100) {
         score += 35;
         reasons.push(`📍 Street Proximity: Same block (${distMeters}m away)`);
       } else if (distMeters <= 250) {
         score += 25;
-        reasons.push(`📍 Area Proximity: Nearby intersection (${distMeters}m away)`);
+        reasons.push(`📍 Area Proximity: Nearby (${distMeters}m away)`);
       } else if (distMeters <= 600) {
         score += 15;
         reasons.push(`📍 Ward Proximity: Same sector (${distMeters}m away)`);
       } else if (distMeters <= 1200) {
         score += 8;
       } else if (distMeters > 3000) {
-        score -= 15; // Distant location penalty
+        score -= 15;
       }
     }
 
-    // 2. Category Match (Up to 25 points)
+    // ── 2. Category Match (up to 25 pts) ────────────────────────────
     const itemTextLower = (
       (item.title || '') +
       ' ' +
@@ -227,41 +250,63 @@ export function findSimilarComplaints(
 
     if (item.category === newCategory) {
       score += 25;
-      reasons.push(`🏷️ Category Match: Both marked as "${newCategory}"`);
+      reasons.push(`🏷️ Category Match: Both "${newCategory}"`);
     } else {
       const targetKeywords = DOMAIN_KEYWORDS[newCategory] || [];
-      const hasCrossDomainWord = targetKeywords.some((kw) => itemTextLower.includes(kw));
-      if (hasCrossDomainWord) {
+      if (targetKeywords.some((kw) => itemTextLower.includes(kw))) {
         score += 15;
-        reasons.push(`🏷️ Cross-Category Correlation: Related to "${item.category}"`);
+        reasons.push(`🏷️ Cross-Category: Related to "${item.category}"`);
       }
     }
 
-    // 3. Domain Keywords & Semantic Matching (Up to 25 points)
+    // ── 3. Address Token Overlap (up to 40 pts) — NEW ───────────────
+    const existingAddressLower = (item.location?.address || '').toLowerCase();
+    const existingAddressTokens = existingAddressLower
+      .split(/[\W_]+/)
+      .filter((w) => w.length >= 3 && !ADDRESS_STOPWORDS.has(w));
+
+    if (newAddressTokens.length > 0 && existingAddressTokens.length > 0) {
+      const existingSet = new Set(existingAddressTokens);
+      const sharedAddrTokens = newAddressTokens.filter((t) => existingSet.has(t));
+      const overlap = sharedAddrTokens.length / Math.max(newAddressTokens.length, existingAddressTokens.length);
+
+      if (overlap >= 0.7) {
+        score += 40;
+        reasons.push(`🏠 Address Match: "${sharedAddrTokens.slice(0, 4).join(', ')}" (${Math.round(overlap * 100)}%)`);
+      } else if (overlap >= 0.4) {
+        score += 25;
+        reasons.push(`🏠 Partial Address: "${sharedAddrTokens.slice(0, 3).join(', ')}" (${Math.round(overlap * 100)}%)`);
+      } else if (sharedAddrTokens.length >= 2) {
+        score += 15;
+        reasons.push(`🏠 Shared Area: "${sharedAddrTokens.slice(0, 2).join(', ')}"`);
+      }
+    }
+
+    // ── 4. Domain Keywords & Semantic Matching (up to 20 pts) ───────
     const categoryKeywords = DOMAIN_KEYWORDS[newCategory] || [];
     const sharedDomainKeywords = categoryKeywords.filter(
-      (kw) => descLower.includes(kw) && itemTextLower.includes(kw)
+      (kw) => fullInputLower.includes(kw) && itemTextLower.includes(kw)
     );
 
     if (sharedDomainKeywords.length > 0) {
       score += Math.min(20, sharedDomainKeywords.length * 8);
-      reasons.push(`🔑 Key Hazard Terms: ${sharedDomainKeywords.slice(0, 3).join(', ')}`);
+      reasons.push(`🔑 Hazard Terms: ${sharedDomainKeywords.slice(0, 3).join(', ')}`);
     }
 
-    // 4. Street / Corridor Reference Matching
+    // ── 5. Street / Corridor Reference (up to 15 pts) ──────────────
     const sharedStreet = COMMON_STREET_NAMES.find(
-      (st) => st.length >= 3 && descLower.includes(st) && itemTextLower.includes(st)
+      (st) => st.length >= 3 && fullInputLower.includes(st) && itemTextLower.includes(st)
     );
     if (sharedStreet) {
       score += 15;
-      reasons.push(`🛣️ Same Street Reference: "${sharedStreet}"`);
+      reasons.push(`🛣️ Same Street: "${sharedStreet}"`);
     }
 
-    // 5. Token Overlap (Jaccard similarity)
-    const itemTokens = new Set(itemTextLower.split(/\W+/).filter((w) => w.length >= 3));
+    // ── 6. Description Token Overlap (up to 20 pts) ────────────────
+    const itemTokens = new Set(itemTextLower.split(/[\W_]+/).filter((w) => w.length >= 3));
     let commonWordCount = 0;
     const commonWordsList: string[] = [];
-    for (const w of descTokens) {
+    for (const w of fullInputTokens) {
       if (itemTokens.has(w) && !commonWordsList.includes(w)) {
         commonWordCount++;
         commonWordsList.push(w);
@@ -269,22 +314,33 @@ export function findSimilarComplaints(
     }
 
     if (commonWordCount > 0) {
-      score += Math.min(20, commonWordCount * 6);
-      if (reasons.length < 3 && commonWordsList.length > 0) {
-        reasons.push(`📝 Matching words: ${commonWordsList.slice(0, 3).join(', ')}`);
+      score += Math.min(20, commonWordCount * 5);
+      if (reasons.length < 4 && commonWordsList.length > 0) {
+        reasons.push(`📝 Shared words: ${commonWordsList.slice(0, 4).join(', ')}`);
       }
     }
 
-    // Boost: If close distance (<= 60m) and category matches or hazard words match, it's very likely a duplicate!
-    if (distMeters !== undefined && distMeters <= 60 && (item.category === newCategory || sharedDomainKeywords.length > 0)) {
+    // ── Hard-floor boosts for obvious duplicates ────────────────────
+    // Same coordinates (≤20m) + same category = guaranteed high match
+    if (distMeters !== undefined && distMeters <= 20 && item.category === newCategory) {
+      score = Math.max(score, 92);
+    }
+    // Very close (≤50m) + same category = very likely duplicate
+    else if (distMeters !== undefined && distMeters <= 50 && item.category === newCategory) {
+      score = Math.max(score, 85);
+    }
+    // Close (≤100m) + same category = likely duplicate
+    else if (distMeters !== undefined && distMeters <= 100 && (item.category === newCategory || sharedDomainKeywords.length > 0)) {
       score = Math.max(score, 78);
-    } else if (distMeters !== undefined && distMeters <= 150 && item.category === newCategory) {
+    }
+    // Moderate distance + same category
+    else if (distMeters !== undefined && distMeters <= 200 && item.category === newCategory) {
       score = Math.max(score, 65);
     }
 
     const matchScore = Math.min(98, Math.max(0, score));
 
-    // Threshold: 35 points triggers warning
+    // Threshold: 35 triggers a warning
     if (matchScore >= 35) {
       results.push({
         complaint: item,
@@ -299,13 +355,14 @@ export function findSimilarComplaints(
 }
 
 /**
- * 2B. Database-Aware Duplicate Detection (Queries Firestore Database + Local State)
+ * 2B. Database-Aware Duplicate Detection (Queries Firestore + Local State)
  */
 export async function findSimilarComplaintsWithDb(
   newDescription: string,
   newCategory: IssueCategory,
   localComplaints: Complaint[],
-  newCoordinates?: { lat: number; lng: number }
+  newCoordinates?: { lat: number; lng: number },
+  newAddress?: string
 ): Promise<DuplicateMatch[]> {
   const combined: Complaint[] = [...localComplaints];
 
@@ -323,7 +380,7 @@ export async function findSimilarComplaintsWithDb(
     }
   }
 
-  return findSimilarComplaints(newDescription, newCategory, combined, newCoordinates);
+  return findSimilarComplaints(newDescription, newCategory, combined, newCoordinates, newAddress);
 }
 
 /**

@@ -50,6 +50,7 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isCheckingDuplicates, setIsCheckingDuplicates] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [hasConfirmedReportAnyway, setHasConfirmedReportAnyway] = useState(false);
 
   // Initial geocode resolution for default anchor
   useEffect(() => {
@@ -129,10 +130,13 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
         fullText,
         category,
         complaints,
-        coordinates
+        coordinates,
+        locationAddress
       );
       if (!isCancelled) {
         setSimilarComplaints(matches);
+        // Reset "report anyway" flag whenever new duplicates are detected
+        if (matches.length > 0) setHasConfirmedReportAnyway(false);
         setIsCheckingDuplicates(false);
       }
     }, 350);
@@ -141,7 +145,7 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
       isCancelled = true;
       clearTimeout(timer);
     };
-  }, [description, voiceTranscript, category, coordinates.lat, coordinates.lng, photo, complaints]);
+  }, [description, voiceTranscript, category, coordinates.lat, coordinates.lng, photo, complaints, locationAddress]);
 
   const handleVoiceTranscript = (text: string) => {
     setVoiceTranscript(text);
@@ -165,6 +169,38 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
     }
 
     setIsSubmitting(true);
+
+    // ── DUPLICATE INTERCEPTION (runs every submit unless user clicked "Report Anyway") ──
+    if (!hasConfirmedReportAnyway) {
+      try {
+        const fullText = `${description} ${voiceTranscript}`.trim();
+        const freshMatches = await findSimilarComplaintsWithDb(
+          fullText,
+          category,
+          complaints,
+          coordinates,
+          locationAddress
+        );
+
+        if (freshMatches.length > 0) {
+          setSimilarComplaints(freshMatches);
+          showToast(
+            `⚠️ ${freshMatches.length} similar complaint(s) found nearby (${freshMatches[0].matchScore}% match). Please review below before submitting.`,
+            'warning'
+          );
+          setIsSubmitting(false);
+          // Scroll to the duplicate alert section
+          setTimeout(() => {
+            document.getElementById('duplicate-alert-section')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, 100);
+          return; // BLOCK submission — user must click "Confirm Existing" or "Report Anyway"
+        }
+      } catch (err) {
+        console.warn('Duplicate check failed, allowing submission:', err);
+      }
+    }
+
+    // ── Proceed with submission (either no duplicates or user clicked "Report Anyway") ──
     try {
       const newIssue = await submitComplaint({
         title: `${category} Issue at ${cityAreaDetails?.neighborhood || cityAreaDetails?.road || locationAddress.split(',')[0]}`,
@@ -188,11 +224,22 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
       });
 
       setIsSubmitting(false);
+      setHasConfirmedReportAnyway(false);
       onSuccess(newIssue.trackingId);
     } catch {
       setIsSubmitting(false);
       showToast('Submission failed. Please try again.', 'error');
     }
+  };
+
+  // Called when user explicitly clicks "Report Anyway as New Issue"
+  const handleReportAnyway = () => {
+    setHasConfirmedReportAnyway(true);
+    // Trigger form submission programmatically after setting the flag
+    setTimeout(() => {
+      const form = document.querySelector<HTMLFormElement>('form');
+      if (form) form.requestSubmit();
+    }, 50);
   };
 
   return (
@@ -552,7 +599,7 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
 
         {/* 6. ADVANCED MULTI-FACTOR DUPLICATE COMPLAINT DETECTION ALERT */}
         {similarComplaints.length > 0 && (
-          <section className="bg-surface-container-high rounded-xl p-space-lg shadow-md flex flex-col gap-space-md border-2 border-secondary/40 animate-fade-in">
+          <section id="duplicate-alert-section" className="bg-surface-container-high rounded-xl p-space-lg shadow-md flex flex-col gap-space-md border-2 border-secondary/40 animate-fade-in">
             <div className="flex items-start justify-between gap-space-sm">
               <div className="flex items-center gap-space-xs text-on-secondary-container">
                 <span className="material-symbols-outlined text-[24px] text-secondary">content_copy</span>
@@ -671,7 +718,8 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
             <div className="flex items-center justify-between pt-1 text-[12px] text-on-surface-variant">
               <span>Is your problem distinct from the above records?</span>
               <button
-                type="submit"
+                type="button"
+                onClick={handleReportAnyway}
                 className="px-space-md py-1.5 rounded-lg bg-surface-container-low hover:bg-surface-container text-on-surface font-body text-[12px] font-semibold transition-colors border border-outline-variant/40"
               >
                 <span>Report Anyway as New Issue</span>

@@ -30,6 +30,11 @@ interface ComplaintContextType {
       latitude: number;
       longitude: number;
       ward: string;
+      city?: string;
+      neighborhood?: string;
+      suburb?: string;
+      state?: string;
+      postcode?: string;
     };
     aiSummary: {
       category: IssueCategory;
@@ -183,6 +188,11 @@ export const ComplaintProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       latitude: number;
       longitude: number;
       ward: string;
+      city?: string;
+      neighborhood?: string;
+      suburb?: string;
+      state?: string;
+      postcode?: string;
     };
     aiSummary: {
       category: IssueCategory;
