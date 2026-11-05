@@ -158,12 +158,45 @@ const COMMON_STREET_NAMES = [
 ];
 
 /**
- * 2. Multi-Factor AI & Proximity Duplicate Detection (Balanced & Defect-Aware)
+ * Defect-specific keywords by category.
+ * Used exclusively for identifying matching civic defects.
+ * Notice: Generic words like 'road', 'street', 'area', 'water', 'city' are excluded!
+ */
+const DEFECT_KEYWORDS: Record<IssueCategory, string[]> = {
+  Roads: [
+    'pothole', 'crater', 'ditch', 'crack', 'asphalt', 'cave-in', 'sinkhole',
+    'speed breaker', 'divider', 'barrier', 'manhole', 'pavement', 'curb', 'patch'
+  ],
+  Garbage: [
+    'dumpster', 'overflowing', 'bin', 'trash', 'garbage dump', 'litter',
+    'stench', 'smell', 'odor', 'debris', 'carcass', 'plastic', 'waste'
+  ],
+  'Water Supply': [
+    'pipe leak', 'pipeline burst', 'pipe burst', 'leakage', 'valve leak', 'tap broken',
+    'low pressure', 'no water', 'contaminated', 'dirty water', 'muddy water'
+  ],
+  Drainage: [
+    'drain clogged', 'sewage overflow', 'sewer', 'manhole overflowing', 'gutter',
+    'waterlogging', 'flooding', 'stagnant', 'culvert', 'rainwater'
+  ],
+  Streetlights: [
+    'streetlight', 'street light', 'lamp broken', 'bulb fused', 'flickering', 'pole fallen',
+    'blackout', 'wiring', 'luminaire', 'hanging wire', 'darkness'
+  ],
+  Other: [
+    'encroachment', 'fallen tree', 'sparking', 'electric wire', 'stray animal', 'fissure'
+  ]
+};
+
+/**
+ * 2. Defect-Specific Duplicate Detection
  *
- * Prevents false duplicates:
- *  - Different issue categories at the same location are NEVER duplicates (different depts).
- *  - Different defects within the same category (e.g., pothole vs speed breaker) are NOT duplicates.
- *  - Only flags duplicate if BOTH location/proximity AND actual defect keywords/content match.
+ * Rules:
+ *  1. Different categories are NEVER duplicates (0% match).
+ *  2. Distance must be within 120 meters.
+ *  3. Both complaints must describe the SAME actual physical defect (e.g. pothole vs pothole).
+ *     Different defects at the same location (e.g. pothole vs speed breaker, or streetlight vs garbage)
+ *     are recognized as separate civic issues (0% duplicate match).
  */
 export function findSimilarComplaints(
   newDescription: string,
@@ -172,48 +205,45 @@ export function findSimilarComplaints(
   newCoordinates?: { lat: number; lng: number },
   newAddress?: string
 ): DuplicateMatch[] {
-  const newDescLower = (newDescription || '').toLowerCase();
-  const newAddressLower = (newAddress || '').toLowerCase();
+  if (!newCategory || !existingComplaints || existingComplaints.length === 0) {
+    return [];
+  }
 
-  // Words that should not be used as defect tokens
-  const GENERIC_STOPWORDS = new Set([
-    'the', 'and', 'for', 'with', 'this', 'that', 'near', 'from', 'have', 'there',
-    'please', 'issue', 'problem', 'complaint', 'reported', 'fixed', 'very', 'urgent',
-    'area', 'road', 'street', 'lane', 'nagar', 'colony', 'city', 'ward', 'block',
-    'andhra', 'pradesh', 'visakhapatnam', 'madhurawada', 'swatantra', 'sector'
+  // Common English and Indian filler words / location stopwords to ignore during defect comparison
+  const STOPWORDS = new Set([
+    'the', 'and', 'for', 'with', 'this', 'that', 'from', 'have', 'there', 'please',
+    'near', 'next', 'behind', 'opposite', 'road', 'street', 'lane', 'nagar', 'colony',
+    'area', 'city', 'ward', 'town', 'andhra', 'pradesh', 'visakhapatnam', 'madhurawada',
+    'swatantra', 'sector', 'block', 'issue', 'problem', 'complaint', 'defect', 'fixed',
+    'urgent', 'very', 'bad', 'damage', 'damaged', 'causing', 'here', 'look'
   ]);
 
-  // Extract distinct problem words (excluding location/generic words)
-  const newProblemTokens = newDescLower
-    .split(/[\W_]+/)
-    .filter((w) => w.length >= 3 && !GENERIC_STOPWORDS.has(w));
+  const cleanWords = (text: string): string[] => {
+    return (text || '')
+      .toLowerCase()
+      .split(/[\W_]+/)
+      .filter((w) => w.length >= 3 && !STOPWORDS.has(w));
+  };
+
+  const newWords = new Set(cleanWords(newDescription));
+  const categoryDefects = DEFECT_KEYWORDS[newCategory] || [];
+
+  // Find defect keywords mentioned in the new complaint
+  const newTextLower = (newDescription || '').toLowerCase();
+  const newDefects = categoryDefects.filter((defect) => newTextLower.includes(defect));
 
   const results: DuplicateMatch[] = [];
 
   for (const item of existingComplaints) {
     if (item.status === 'Resolved') continue;
 
-    // ── 1. Category Compatibility Check ─────────────────────────────
-    const isSameCategory = item.category === newCategory;
-    const categoryKeywords = DOMAIN_KEYWORDS[newCategory] || [];
-    const itemDescLower = (
-      (item.title || '') + ' ' + (item.description || '')
-    ).toLowerCase();
-
-    // If completely different category with no shared hazard keywords, they are NOT duplicates!
-    if (!isSameCategory) {
-      const hasCrossDomainKeyword = categoryKeywords.some((kw) => itemDescLower.includes(kw));
-      if (!hasCrossDomainKeyword) {
-        // Different problem category at the same location is a VALID separate complaint
-        continue;
-      }
+    // RULE 1: STRICT CATEGORY MATCH — Different categories are NEVER duplicates
+    if (item.category !== newCategory) {
+      continue;
     }
 
-    let score = 0;
-    const reasons: string[] = [];
+    // RULE 2: DISTANCE MUST BE CLOSE
     let distMeters: number | undefined;
-
-    // ── 2. Geographic Proximity (up to 30 pts) ──────────────────────
     if (
       newCoordinates &&
       typeof newCoordinates.lat === 'number' &&
@@ -228,108 +258,79 @@ export function findSimilarComplaints(
         item.location.latitude,
         item.location.longitude
       );
-
-      if (distMeters <= 25) {
-        score += 30;
-        reasons.push(`📍 Spot Proximity: Exact location (${distMeters}m away)`);
-      } else if (distMeters <= 75) {
-        score += 25;
-        reasons.push(`📍 Street Proximity: Same block (${distMeters}m away)`);
-      } else if (distMeters <= 200) {
-        score += 15;
-        reasons.push(`📍 Area Proximity: Nearby (${distMeters}m away)`);
-      } else if (distMeters <= 500) {
-        score += 8;
-      } else if (distMeters > 2000) {
-        score -= 20; // Distant location penalty
-      }
     }
 
-    // ── 3. Category Match (up to 20 pts) ────────────────────────────
-    if (isSameCategory) {
-      score += 20;
-      reasons.push(`🏷️ Category: Both categorized under "${newCategory}"`);
-    } else {
-      score += 5; // Cross-category minimal link
+    // If locations are more than 120m apart, they cannot be the same physical defect
+    if (distMeters !== undefined && distMeters > 120) {
+      continue;
     }
 
-    // ── 4. Specific Hazard / Defect Keyword Matching (up to 30 pts) ──
-    // Checks if the two complaints describe the SAME physical defect (e.g., both describe pothole vs pothole)
-    const sharedDefectKeywords = categoryKeywords.filter(
-      (kw) => newDescLower.includes(kw) && itemDescLower.includes(kw)
-    );
+    // RULE 3: DEFECT COMPARISON (Examine only the actual citizen description, not title or address!)
+    const existingDescLower = (item.description || '').toLowerCase();
+    const existingWords = new Set(cleanWords(item.description || ''));
 
-    if (sharedDefectKeywords.length > 0) {
-      const defectPoints = Math.min(30, sharedDefectKeywords.length * 15);
-      score += defectPoints;
-      reasons.push(`🔑 Matching Defect: "${sharedDefectKeywords.slice(0, 3).join(', ')}"`);
-    }
+    // Check shared defect keywords (e.g. both mention "pothole", or both mention "leak")
+    const existingDefects = categoryDefects.filter((defect) => existingDescLower.includes(defect));
+    const sharedDefects = newDefects.filter((defect) => existingDefects.includes(defect));
 
-    // ── 5. Description Content Token Overlap (up to 20 pts) ──────────
-    const itemTokens = new Set(
-      itemDescLower
-        .split(/[\W_]+/)
-        .filter((w) => w.length >= 3 && !GENERIC_STOPWORDS.has(w))
-    );
-
+    // Calculate word token overlap between descriptions
     let sharedWordCount = 0;
-    const sharedWords: string[] = [];
-    for (const token of newProblemTokens) {
-      if (itemTokens.has(token) && !sharedWords.includes(token)) {
+    const sharedTokens: string[] = [];
+    for (const w of newWords) {
+      if (existingWords.has(w)) {
         sharedWordCount++;
-        sharedWords.push(token);
+        sharedTokens.push(w);
       }
     }
 
-    if (sharedWordCount > 0) {
-      score += Math.min(20, sharedWordCount * 6);
-      if (reasons.length < 3) {
-        reasons.push(`📝 Matching problem terms: "${sharedWords.slice(0, 3).join(', ')}"`);
+    const totalUniqueWords = new Set([...newWords, ...existingWords]).size;
+    const jaccardSimilarity = totalUniqueWords > 0 ? sharedWordCount / totalUniqueWords : 0;
+
+    // If neither shared specific defect keywords nor significant word overlap exists:
+    // They are DIFFERENT problems at the same location!
+    const isSameDefect = sharedDefects.length > 0 || jaccardSimilarity >= 0.35 || sharedWordCount >= 2;
+
+    if (!isSameDefect) {
+      // Different problems at the same location (e.g. pothole vs broken divider) are NOT duplicates!
+      continue;
+    }
+
+    // Calculate confidence score for TRUE duplicates
+    let matchScore = 70;
+    const reasons: string[] = [];
+
+    if (distMeters !== undefined) {
+      if (distMeters <= 30) {
+        matchScore += 18;
+        reasons.push(`📍 Exact Spot: ${distMeters}m away`);
+      } else if (distMeters <= 75) {
+        matchScore += 12;
+        reasons.push(`📍 Same Street: ${distMeters}m away`);
+      } else {
+        matchScore += 5;
+        reasons.push(`📍 Nearby: ${distMeters}m away`);
       }
+    } else {
+      matchScore += 10;
     }
 
-    // ── 6. Address / Street Token Overlap (up to 15 pts) ─────────────
-    if (newAddressLower && item.location?.address) {
-      const existingAddressLower = item.location.address.toLowerCase();
-      const addrTokens = newAddressLower.split(/[\W_]+/).filter((w) => w.length >= 4 && !GENERIC_STOPWORDS.has(w));
-      const sharedAddr = addrTokens.filter((t) => existingAddressLower.includes(t));
-      if (sharedAddr.length >= 2) {
-        score += 15;
-        reasons.push(`🏠 Same Location Corridor: "${sharedAddr.slice(0, 2).join(', ')}"`);
-      }
+    if (sharedDefects.length > 0) {
+      matchScore += 10;
+      reasons.push(`🔑 Identical Defect: "${sharedDefects.join(', ')}"`);
     }
 
-    // ── 7. Intelligent Boost & Guard Rules ───────────────────────────
-    // RULE A: If different category, cap maximum score at 25% (cannot be duplicate)
-    if (!isSameCategory) {
-      score = Math.min(score, 25);
+    if (sharedTokens.length > 0) {
+      reasons.push(`📝 Matching details: "${sharedTokens.slice(0, 3).join(', ')}"`);
     }
 
-    // RULE B: If same category & close proximity (≤60m), but ZERO shared defect words and ZERO description overlap:
-    // They are DIFFERENT problems at the same location! Cap score at 45%.
-    if (isSameCategory && distMeters !== undefined && distMeters <= 60 && sharedDefectKeywords.length === 0 && sharedWordCount === 0) {
-      score = Math.min(score, 45);
-    }
+    const finalScore = Math.min(96, Math.max(70, matchScore));
 
-    // RULE C: If same category, close proximity (≤100m) AND they actually share the SAME defect keywords:
-    // This is a TRUE duplicate! Ensure high match score.
-    if (isSameCategory && distMeters !== undefined && distMeters <= 100 && sharedDefectKeywords.length > 0) {
-      score = Math.max(score, 82);
-    } else if (isSameCategory && distMeters !== undefined && distMeters <= 30 && sharedWordCount >= 2) {
-      score = Math.max(score, 85);
-    }
-
-    const matchScore = Math.min(98, Math.max(0, score));
-
-    // Threshold: Only alert if match is at least 60% (eliminates false positives for distinct problems)
-    if (matchScore >= 60) {
-      results.push({
-        complaint: item,
-        matchScore,
-        distanceMeters: distMeters,
-        matchReasons: reasons.length > 0 ? reasons : ['High proximity & matching defect detected'],
-      });
-    }
+    results.push({
+      complaint: item,
+      matchScore: finalScore,
+      distanceMeters: distMeters,
+      matchReasons: reasons,
+    });
   }
 
   return results.sort((a, b) => b.matchScore - a.matchScore);

@@ -379,26 +379,32 @@ export const ComplaintProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           if (candidate.category !== kept.category) continue;
 
           let isDuplicate = false;
+          let dist = 9999;
 
           if (
             kept.location?.latitude && kept.location?.longitude &&
             candidate.location?.latitude && candidate.location?.longitude
           ) {
-            const dist = calculateDistanceMeters(
+            dist = calculateDistanceMeters(
               kept.location.latitude,
               kept.location.longitude,
               candidate.location.latitude,
               candidate.location.longitude
             );
-            if (dist <= 200) {
-              isDuplicate = true;
-            }
           }
 
-          if (!isDuplicate && kept.location?.address && candidate.location?.address) {
-            const addrA = kept.location.address.toLowerCase();
-            const addrB = candidate.location.address.toLowerCase();
-            if (addrA === addrB || addrA.includes(addrB) || addrB.includes(addrA)) {
+          const addrA = (kept.location?.address || '').toLowerCase();
+          const addrB = (candidate.location?.address || '').toLowerCase();
+          const isSameSpot = dist <= 75 || (addrA.length > 5 && addrA === addrB);
+
+          // Verify that they describe the SAME problem defect, not different problems!
+          if (isSameSpot) {
+            const wordsA = (kept.description || '').toLowerCase().split(/[\W_]+/).filter((w) => w.length >= 3);
+            const wordsB = new Set((candidate.description || '').toLowerCase().split(/[\W_]+/).filter((w) => w.length >= 3));
+            const sharedCount = wordsA.filter((w) => wordsB.has(w)).length;
+
+            // Only mark duplicate if they share at least 2 problem description words
+            if (sharedCount >= 2 || (kept.description && kept.description === candidate.description)) {
               isDuplicate = true;
             }
           }

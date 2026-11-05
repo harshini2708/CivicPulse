@@ -276,16 +276,35 @@ app.post('/api/ai/check-duplicates', (req, res) => {
   const { description = '', category = 'Roads', coordinates, complaints = [] } = req.body;
 
   const descLower = (description || '').toLowerCase();
-  const descTokens = descLower.split(/\W+/).filter((w) => w.length >= 3);
+  const STOPWORDS = new Set([
+    'the', 'and', 'for', 'with', 'this', 'that', 'near', 'from', 'have', 'there',
+    'road', 'street', 'lane', 'nagar', 'colony', 'area', 'city', 'ward', 'sector',
+    'issue', 'problem', 'complaint', 'defect', 'fixed', 'urgent', 'bad', 'damage'
+  ]);
+
+  const cleanWords = (text) => (text || '').toLowerCase().split(/[\W_]+/).filter((w) => w.length >= 3 && !STOPWORDS.has(w));
+  const newWords = new Set(cleanWords(description));
+
+  const DEFECT_KEYWORDS = {
+    Roads: ['pothole', 'crater', 'ditch', 'crack', 'asphalt', 'cave-in', 'sinkhole', 'speed breaker', 'divider', 'barrier', 'manhole'],
+    Garbage: ['dumpster', 'overflowing', 'bin', 'trash', 'garbage dump', 'litter', 'stench', 'smell', 'odor', 'carcass', 'debris'],
+    'Water Supply': ['pipe leak', 'pipeline burst', 'pipe burst', 'leakage', 'valve leak', 'tap broken', 'low pressure', 'no water'],
+    Drainage: ['drain clogged', 'sewage overflow', 'sewer', 'manhole overflowing', 'gutter', 'waterlogging', 'flooding', 'stagnant'],
+    Streetlights: ['streetlight', 'street light', 'lamp broken', 'bulb fused', 'flickering', 'pole fallen', 'blackout', 'wiring'],
+    Other: ['encroachment', 'fallen tree', 'sparking', 'electric wire', 'stray animal']
+  };
+
+  const categoryDefects = DEFECT_KEYWORDS[category] || [];
+  const newDefects = categoryDefects.filter((d) => descLower.includes(d));
   const results = [];
 
   for (const item of complaints) {
     if (item.status === 'Resolved') continue;
 
-    let score = 0;
-    const reasons = [];
-    let distMeters;
+    // RULE 1: Different categories are NEVER duplicates
+    if (item.category !== category) continue;
 
+    let distMeters;
     if (
       coordinates &&
       typeof coordinates.lat === 'number' &&
@@ -300,65 +319,45 @@ app.post('/api/ai/check-duplicates', (req, res) => {
         item.location.latitude,
         item.location.longitude
       );
+    }
 
-      if (distMeters <= 35) {
-        score += 45;
-        reasons.push(`📍 Spot Proximity: Exact location (${distMeters}m away)`);
-      } else if (distMeters <= 100) {
-        score += 35;
-        reasons.push(`📍 Street Proximity: Same block (${distMeters}m away)`);
-      } else if (distMeters <= 250) {
-        score += 25;
-        reasons.push(`📍 Area Proximity: Nearby intersection (${distMeters}m away)`);
-      } else if (distMeters <= 600) {
-        score += 15;
-        reasons.push(`📍 Ward Proximity: Same sector (${distMeters}m away)`);
-      } else if (distMeters > 3000) {
-        score -= 15;
+    if (distMeters !== undefined && distMeters > 120) continue;
+
+    const existingDescLower = (item.description || '').toLowerCase();
+    const existingWords = new Set(cleanWords(item.description));
+    const existingDefects = categoryDefects.filter((d) => existingDescLower.includes(d));
+    const sharedDefects = newDefects.filter((d) => existingDefects.includes(d));
+
+    let sharedCount = 0;
+    const sharedTokens = [];
+    for (const w of newWords) {
+      if (existingWords.has(w)) {
+        sharedCount++;
+        sharedTokens.push(w);
       }
     }
 
-    const itemTextLower = (
-      (item.title || '') +
-      ' ' +
-      (item.description || '') +
-      ' ' +
-      (item.location?.address || '')
-    ).toLowerCase();
+    const isSameDefect = sharedDefects.length > 0 || sharedCount >= 2;
+    if (!isSameDefect) continue; // Different problem at same location is NOT a duplicate!
 
-    if (item.category === category) {
-      score += 25;
-      reasons.push(`🏷️ Category Match: Both marked as "${category}"`);
+    let matchScore = 75;
+    const reasons = [];
+
+    if (distMeters !== undefined) {
+      matchScore += distMeters <= 30 ? 15 : 10;
+      reasons.push(`📍 Location: ${distMeters}m away`);
+    }
+    if (sharedDefects.length > 0) {
+      matchScore += 8;
+      reasons.push(`🔑 Matching Defect: "${sharedDefects.join(', ')}"`);
     }
 
-    const itemTokens = new Set(itemTextLower.split(/\W+/).filter((w) => w.length >= 3));
-    let commonCount = 0;
-    const commonWords = [];
-    for (const w of descTokens) {
-      if (itemTokens.has(w) && !commonWords.includes(w)) {
-        commonCount++;
-        commonWords.push(w);
-      }
-    }
-
-    if (commonCount > 0) {
-      score += Math.min(20, commonCount * 6);
-      reasons.push(`📝 Matching terms: ${commonWords.slice(0, 3).join(', ')}`);
-    }
-
-    if (distMeters !== undefined && distMeters <= 60 && item.category === category) {
-      score = Math.max(score, 78);
-    }
-
-    const matchScore = Math.min(98, Math.max(0, score));
-    if (matchScore >= 35) {
-      results.push({
-        complaint: item,
-        matchScore,
-        distanceMeters: distMeters,
-        matchReasons: reasons,
-      });
-    }
+    results.push({
+      complaint: item,
+      matchScore: Math.min(96, matchScore),
+      distanceMeters: distMeters,
+      matchReasons: reasons,
+    });
   }
 
   results.sort((a, b) => b.matchScore - a.matchScore);

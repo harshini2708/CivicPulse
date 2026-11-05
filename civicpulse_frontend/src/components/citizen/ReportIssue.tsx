@@ -755,144 +755,84 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
           </div>
         </section>
 
-        {/* 4. Location & Incident Address (Live GPS or Manual Away Place Entry) */}
+        {/* 4. Incident Location & Address (Auto-Filled by Camera GPS or Manually Editable for Away Photos) */}
         <section className="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm flex flex-col gap-space-sm border border-outline-variant/30">
           <div className="flex items-center justify-between flex-wrap gap-space-xs">
             <div className="flex items-center gap-space-xs">
-              <span className="material-symbols-outlined text-secondary text-[20px]">near_me</span>
-              <h3 className="font-headline font-semibold text-[16px] text-on-surface">
-                Location &amp; Incident Address
-              </h3>
-            </div>
-
-            {/* Mode Switcher: Live GPS vs Manual Away Place */}
-            <div className="inline-flex rounded-lg bg-surface-container p-0.5 border border-outline-variant/30">
-              <button
-                type="button"
-                onClick={() => {
-                  setLocationMode('gps');
-                  requestLocation();
-                }}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
-                  locationMode === 'gps'
-                    ? 'bg-surface-container-lowest text-primary shadow-xs'
-                    : 'text-on-surface-variant hover:text-on-surface'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[14px]">my_location</span>
-                <span>Live GPS (On-Site)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setLocationMode('manual');
-                  setManualAddressInput(locationAddress);
-                }}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
-                  locationMode === 'manual'
-                    ? 'bg-surface-container-lowest text-primary shadow-xs'
-                    : 'text-on-surface-variant hover:text-on-surface'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[14px]">edit_location_alt</span>
-                <span>Away Place (Manual)</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Mode 1: Live GPS Display */}
-          {locationMode === 'gps' ? (
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-space-md pt-space-xs">
-              <div className="flex items-center gap-space-sm">
-                <div className="w-8 h-8 rounded-lg bg-surface-container flex items-center justify-center text-on-surface-variant shrink-0">
-                  <span className="material-symbols-outlined text-[18px]">location_on</span>
-                </div>
-                <div className="flex flex-col">
-                  <span className="font-body text-[14px] text-on-surface font-semibold">
-                    {locationAddress}
-                  </span>
-                  <span className="font-body text-[12px] text-on-surface-variant font-mono">
-                    Latitude: {coordinates.lat.toFixed(4)}° N • Longitude: {coordinates.lng.toFixed(4)}° W
-                  </span>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={requestLocation}
-                  className="px-space-md py-1.5 rounded-lg font-body text-[12px] font-semibold text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center gap-1 border border-outline-variant/30 shrink-0 cursor-pointer"
-                >
-                  <span className="material-symbols-outlined text-[16px]">refresh</span>
-                  <span>Refresh GPS</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLocationMode('manual');
-                    setManualAddressInput(locationAddress);
-                  }}
-                  className="px-space-md py-1.5 rounded-lg font-body text-[12px] font-semibold text-primary hover:bg-primary-container/20 transition-colors flex items-center gap-1 border border-primary/30 shrink-0 cursor-pointer"
-                >
-                  <span className="material-symbols-outlined text-[16px]">edit</span>
-                  <span>Edit Address</span>
-                </button>
-              </div>
-            </div>
-          ) : (
-            /* Mode 2: Manual Address Entry for Away Places */
-            <div className="flex flex-col gap-2 pt-space-xs">
-              <div className="p-2.5 rounded-lg bg-primary-container/20 border border-primary/30 flex items-start gap-2">
-                <span className="material-symbols-outlined text-primary text-[18px] shrink-0 mt-0.5">
-                  info
-                </span>
-                <p className="font-body text-[12px] text-on-surface leading-snug">
-                  <strong>Reporting an Away Location:</strong> Enter the street name, area, or landmark where you took this photo. We'll automatically resolve the municipal ward and map pin.
+              <span className="material-symbols-outlined text-secondary text-[20px]">location_on</span>
+              <div>
+                <h3 className="font-headline font-semibold text-[16px] text-on-surface">
+                  Incident Location &amp; Address
+                </h3>
+                <p className="font-body text-[12px] text-on-surface-variant">
+                  {photoSource === 'camera'
+                    ? '📍 Live Camera on-site: Address auto-filled from device GPS coordinates.'
+                    : '✍️ Photo from device: Type the address where this problem occurred (Away Place), or click Auto-Fill.'}
                 </p>
               </div>
-
-              <div className="flex flex-col sm:flex-row items-center gap-2">
-                <div className="relative flex-1 w-full">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-on-surface-variant text-[18px]">
-                    search
-                  </span>
-                  <input
-                    type="text"
-                    value={manualAddressInput}
-                    onChange={(e) => {
-                      setManualAddressInput(e.target.value);
-                      setLocationAddress(e.target.value);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleManualAddressLookup();
-                      }
-                    }}
-                    placeholder="Enter street, area, or landmark (e.g. Kala Nagar Road, Madhurawada, Visakhapatnam)..."
-                    className="w-full h-10 pl-9 pr-3 bg-surface-container-low rounded-lg text-sm text-on-surface font-medium focus:outline-none focus:ring-2 focus:ring-primary/40 border border-outline-variant/30"
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleManualAddressLookup()}
-                  disabled={isGeocodingManual}
-                  className="w-full sm:w-auto px-4 h-10 rounded-lg bg-primary text-on-primary font-body text-[13px] font-semibold flex items-center justify-center gap-1.5 shadow-sm hover:opacity-90 disabled:opacity-50 transition-opacity shrink-0 cursor-pointer"
-                >
-                  {isGeocodingManual ? (
-                    <>
-                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-                      <span>Locating...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="material-symbols-outlined text-[16px]">pin_drop</span>
-                      <span>Update on Map</span>
-                    </>
-                  )}
-                </button>
-              </div>
             </div>
-          )}
+
+            <button
+              type="button"
+              onClick={requestLocation}
+              className="px-space-md py-1.5 rounded-lg font-body text-[12px] font-semibold text-primary bg-primary-container/20 hover:bg-primary-container/40 transition-colors flex items-center gap-1.5 border border-primary/30 cursor-pointer shrink-0"
+              title="Detect and auto-fill from current on-site GPS location"
+            >
+              <span className="material-symbols-outlined text-[16px]">my_location</span>
+              <span>Auto-Fill with Current GPS</span>
+            </button>
+          </div>
+
+          {/* Directly Editable Address Input Field */}
+          <div className="flex flex-col sm:flex-row items-center gap-2 pt-2">
+            <div className="relative flex-1 w-full">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-on-surface-variant text-[18px]">
+                edit_location
+              </span>
+              <input
+                type="text"
+                value={locationAddress}
+                onChange={(e) => {
+                  setLocationAddress(e.target.value);
+                  setManualAddressInput(e.target.value);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleManualAddressLookup(locationAddress);
+                  }
+                }}
+                placeholder="Enter street, area, or landmark (e.g. Kala Nagar Road, SWATANTRA NAGAR, Madhurawada)..."
+                className="w-full h-11 pl-9 pr-3 bg-surface-container-low rounded-lg text-sm text-on-surface font-medium focus:outline-none focus:ring-2 focus:ring-primary/40 border border-outline-variant/30"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => handleManualAddressLookup(locationAddress)}
+              disabled={isGeocodingManual}
+              className="w-full sm:w-auto px-4 h-11 rounded-lg bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-body text-[13px] font-semibold flex items-center justify-center gap-1.5 border border-outline-variant/40 shadow-xs cursor-pointer shrink-0"
+              title="Locate and set map pin for this address"
+            >
+              {isGeocodingManual ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
+                  <span>Locating...</span>
+                </>
+              ) : (
+                <>
+                  <span className="material-symbols-outlined text-[18px] text-secondary">pin_drop</span>
+                  <span>Pin on Map</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between text-[11px] text-on-surface-variant px-1 font-mono">
+            <span>Latitude: {coordinates.lat.toFixed(4)}° N • Longitude: {coordinates.lng.toFixed(4)}° E</span>
+            <span className="text-secondary font-semibold">
+              {cityAreaDetails?.source === 'nominatim' ? 'OSM Geocoded' : 'Auto-Resolved'}
+            </span>
+          </div>
 
           {/* Near City Area Details Grid */}
           <div className="pt-space-xs border-t border-surface-container mt-space-xs">
