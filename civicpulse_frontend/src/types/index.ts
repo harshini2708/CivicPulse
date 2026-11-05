@@ -36,6 +36,11 @@ export interface ComplaintLocation {
   latitude: number;
   longitude: number;
   ward: string;
+  city?: string;
+  neighborhood?: string;
+  suburb?: string;
+  state?: string;
+  postcode?: string;
 }
 
 export interface AISummary {

@@ -2,8 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useComplaints } from '../../context/ComplaintContext';
 import { CameraCaptureModal } from '../common/CameraCaptureModal';
 import { AudioRecorder } from '../common/AudioRecorder';
-import { IssueCategory, PriorityLevel, Complaint } from '../../types';
-import { analyzeComplaintWithGemini, findSimilarComplaints } from '../../config/gemini';
+import { OpenStreetMap } from '../common/OpenStreetMap';
+import { IssueCategory, PriorityLevel } from '../../types';
+import {
+  analyzeComplaintWithGemini,
+  findSimilarComplaintsWithDb,
+  DuplicateMatch,
+} from '../../config/gemini';
+import { reverseGeocodeLatLng, CityAreaDetails } from '../../utils/helpers';
 
 interface ReportIssueProps {
   onSuccess: (trackingId: string) => void;
@@ -25,6 +31,8 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
   const [coordinates, setCoordinates] = useState({ lat: 40.7135, lng: -74.0048 });
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'locating' | 'acquired' | 'error'>('acquired');
   const [ward, setWard] = useState('Ward 4A');
+  const [cityAreaDetails, setCityAreaDetails] = useState<CityAreaDetails | null>(null);
+  const [isResolvingArea, setIsResolvingArea] = useState(false);
 
   // AI & Duplicate Detection State
   const [aiSummary, setAiSummary] = useState<{
@@ -38,62 +46,102 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
     keySummary: 'Reported road defect requiring asphalt patching.',
     keywords: ['pothole', 'road hazard'],
   });
-  const [similarComplaint, setSimilarComplaint] = useState<{
-    complaint: Complaint;
-    matchScore: number;
-  } | null>(null);
+  const [similarComplaints, setSimilarComplaints] = useState<DuplicateMatch[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isCheckingDuplicates, setIsCheckingDuplicates] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Auto GPS acquisition
+  // Initial geocode resolution for default anchor
+  useEffect(() => {
+    let isMounted = true;
+    setIsResolvingArea(true);
+    reverseGeocodeLatLng(coordinates.lat, coordinates.lng).then((area) => {
+      if (isMounted) {
+        setCityAreaDetails(area);
+        setLocationAddress(area.fullAddress);
+        if (area.ward) setWard(area.ward);
+        setIsResolvingArea(false);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Live GPS acquisition with immediate reverse-geocoding of city & area
   const requestLocation = () => {
     if (!navigator.geolocation) {
       showToast('Geolocation is not supported by your browser', 'warning');
       return;
     }
     setGpsStatus('locating');
+    setIsResolvingArea(true);
+
     navigator.geolocation.getCurrentPosition(
-      (position) => {
+      async (position) => {
         const { latitude, longitude } = position.coords;
         setCoordinates({ lat: latitude, lng: longitude });
         setGpsStatus('acquired');
-        setLocationAddress(`Near Lat: ${latitude.toFixed(4)}°, Lng: ${longitude.toFixed(4)}°, District 4`);
-        setWard('Ward 4A');
-        showToast('Live GPS location verified (±3m)', 'success');
+        showToast('Live GPS coordinates acquired (±3m)', 'success');
+
+        const area = await reverseGeocodeLatLng(latitude, longitude);
+        setCityAreaDetails(area);
+        setLocationAddress(area.fullAddress);
+        if (area.ward) setWard(area.ward);
+        setIsResolvingArea(false);
+
+        const areaLabel = area.neighborhood || area.suburb || area.city;
+        showToast(`Area resolved: ${areaLabel}`, 'success');
       },
-      (error) => {
+      async (error) => {
         console.warn('GPS location access denied or timed out:', error);
         setGpsStatus('error');
-        showToast('Could not fetch GPS. Using default District 4 anchor.', 'info');
+        showToast('Could not fetch GPS. Using District 4 civic anchor.', 'info');
+
+        const area = await reverseGeocodeLatLng(coordinates.lat, coordinates.lng);
+        setCityAreaDetails(area);
+        setIsResolvingArea(false);
       },
       { timeout: 8000, enableHighAccuracy: true }
     );
   };
 
-  // Re-run AI Analysis & Duplicate Check when description changes
+  // Live AI Triage & Multi-Factor Proximity Duplicate Detection
   useEffect(() => {
+    let isCancelled = false;
     const timer = setTimeout(async () => {
       const fullText = `${description} ${voiceTranscript}`.trim();
-      if (fullText.length > 10) {
+
+      // 1. Run AI analysis if there is enough text
+      if (fullText.length >= 8) {
         setIsAnalyzing(true);
         const analysis = await analyzeComplaintWithGemini(fullText, photo || undefined);
-        setAiSummary(analysis);
-        setCategory(analysis.category);
-        setPriority(analysis.urgency);
-
-        // Duplicate Check
-        const matches = findSimilarComplaints(fullText, analysis.category, complaints);
-        if (matches.length > 0) {
-          setSimilarComplaint(matches[0]);
-        } else {
-          setSimilarComplaint(null);
+        if (!isCancelled) {
+          setAiSummary(analysis);
+          setPriority(analysis.urgency);
+          setIsAnalyzing(false);
         }
-        setIsAnalyzing(false);
       }
-    }, 600);
 
-    return () => clearTimeout(timer);
-  }, [description, voiceTranscript, photo, complaints]);
+      // 2. Comprehensive Database-Aware & Proximity Duplicate Check
+      setIsCheckingDuplicates(true);
+      const matches = await findSimilarComplaintsWithDb(
+        fullText,
+        category,
+        complaints,
+        coordinates
+      );
+      if (!isCancelled) {
+        setSimilarComplaints(matches);
+        setIsCheckingDuplicates(false);
+      }
+    }, 350);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [description, voiceTranscript, category, coordinates.lat, coordinates.lng, photo, complaints]);
 
   const handleVoiceTranscript = (text: string) => {
     setVoiceTranscript(text);
@@ -119,7 +167,7 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
     setIsSubmitting(true);
     try {
       const newIssue = await submitComplaint({
-        title: `${category} Issue at ${locationAddress.split(',')[0]}`,
+        title: `${category} Issue at ${cityAreaDetails?.neighborhood || cityAreaDetails?.road || locationAddress.split(',')[0]}`,
         description: description || voiceTranscript,
         voiceTranscript,
         category,
@@ -129,14 +177,19 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
           address: locationAddress,
           latitude: coordinates.lat,
           longitude: coordinates.lng,
-          ward,
+          ward: cityAreaDetails?.ward || ward,
+          city: cityAreaDetails?.city,
+          neighborhood: cityAreaDetails?.neighborhood,
+          suburb: cityAreaDetails?.suburb,
+          state: cityAreaDetails?.state,
+          postcode: cityAreaDetails?.postcode,
         },
         aiSummary,
       });
 
       setIsSubmitting(false);
       onSuccess(newIssue.trackingId);
-    } catch (err) {
+    } catch {
       setIsSubmitting(false);
       showToast('Submission failed. Please try again.', 'error');
     }
@@ -327,16 +380,18 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
           </div>
         </section>
 
-        {/* 4. GPS Location Capture */}
+        {/* 4. GPS Location & Near City Area Details */}
         <section className="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm flex flex-col gap-space-sm border border-outline-variant/30">
           <div className="flex items-center justify-between flex-wrap gap-space-xs">
             <div className="flex items-center gap-space-xs">
               <span className="material-symbols-outlined text-secondary text-[20px]">near_me</span>
-              <h3 className="font-headline font-semibold text-[16px] text-on-surface">GPS Location</h3>
+              <h3 className="font-headline font-semibold text-[16px] text-on-surface">
+                GPS Location &amp; City Area Details
+              </h3>
             </div>
             <span className="inline-flex items-center gap-1 px-space-sm py-0.5 rounded-full bg-surface-container text-on-tertiary-container font-body text-[11px] font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-on-tertiary-container"></span>
-              <span>{gpsStatus === 'locating' ? 'Locating...' : 'High Accuracy (±3m) • Auto-Detected'}</span>
+              <span>{gpsStatus === 'locating' ? 'Acquiring GPS...' : 'High Accuracy (±3m) • Geotagged'}</span>
             </span>
           </div>
 
@@ -350,18 +405,104 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
                   {locationAddress}
                 </span>
                 <span className="font-body text-[12px] text-on-surface-variant font-mono">
-                  Latitude: {coordinates.lat.toFixed(4)}° N, Longitude: {coordinates.lng.toFixed(4)}° W
+                  Latitude: {coordinates.lat.toFixed(4)}° N • Longitude: {coordinates.lng.toFixed(4)}° W
                 </span>
               </div>
             </div>
             <button
               type="button"
               onClick={requestLocation}
-              className="px-space-md py-1.5 rounded-lg font-body text-[13px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center gap-1 border border-outline-variant/30"
+              className="px-space-md py-1.5 rounded-lg font-body text-[13px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center gap-1 border border-outline-variant/30 shrink-0"
             >
               <span className="material-symbols-outlined text-[16px]">my_location</span>
-              <span>Refresh GPS</span>
+              <span>Refresh GPS &amp; Area</span>
             </button>
+          </div>
+
+          {/* Near City Area Details Grid */}
+          <div className="pt-space-xs border-t border-surface-container mt-space-xs">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider flex items-center gap-1">
+                <span className="material-symbols-outlined text-[14px] text-secondary">domain</span>
+                Detected Municipal Area Details
+              </span>
+              {isResolvingArea && (
+                <span className="text-[10px] text-secondary font-medium animate-pulse flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-secondary animate-ping"></span>
+                  Resolving with OpenStreetMap...
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-space-xs text-left">
+              <div className="p-2.5 rounded-lg bg-surface-container-low/70 border border-surface-container">
+                <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider block">
+                  City / Metro
+                </span>
+                <span className="text-[13px] font-bold text-on-surface truncate block" title={cityAreaDetails?.city}>
+                  🏙️ {cityAreaDetails?.city || 'Metro Region'}
+                </span>
+                <span className="text-[10px] text-on-surface-variant truncate block">
+                  {cityAreaDetails?.state || 'State Territory'}
+                </span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-surface-container-low/70 border border-surface-container">
+                <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider block">
+                  Area / Neighborhood
+                </span>
+                <span
+                  className="text-[13px] font-bold text-on-surface truncate block"
+                  title={cityAreaDetails?.neighborhood || cityAreaDetails?.suburb}
+                >
+                  📍 {cityAreaDetails?.neighborhood || cityAreaDetails?.suburb || 'District 4'}
+                </span>
+                <span className="text-[10px] text-on-surface-variant truncate block">
+                  {cityAreaDetails?.road || 'Local Access Way'}
+                </span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-surface-container-low/70 border border-surface-container">
+                <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider block">
+                  Ward &amp; Zone
+                </span>
+                <span className="text-[13px] font-bold text-secondary truncate block">
+                  🏛️ {cityAreaDetails?.ward || ward}
+                </span>
+                <span className="text-[10px] text-on-surface-variant truncate block">Municipal Zone</span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-surface-container-low/70 border border-surface-container">
+                <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider block">
+                  Postal Code
+                </span>
+                <span className="text-[13px] font-mono font-semibold text-on-surface truncate block">
+                  📮 {cityAreaDetails?.postcode || 'Detected'}
+                </span>
+                <span className="text-[10px] text-on-tertiary-container font-medium truncate block">
+                  {cityAreaDetails?.source === 'nominatim' ? 'OSM Geocoded' : 'Auto-Resolved'}
+                </span>
+              </div>
+            </div>
+
+            {/* Interactive OpenStreetMap Pin for Visual Location Confirmation */}
+            <div className="mt-2.5 rounded-lg overflow-hidden border border-surface-container shadow-xs">
+              <OpenStreetMap
+                center={{ lat: coordinates.lat, lng: coordinates.lng }}
+                zoom={16}
+                height="150px"
+                radiusMetres={150}
+                markers={[
+                  {
+                    lat: coordinates.lat,
+                    lng: coordinates.lng,
+                    title: locationAddress,
+                    color: 'primary',
+                    popup: `${locationAddress} (Complaint Geotag)`,
+                  },
+                ]}
+              />
+            </div>
           </div>
         </section>
 
@@ -409,64 +550,132 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
           </div>
         </section>
 
-        {/* 6. DUPLICATE COMPLAINT DETECTION ALERT (Matching Stitch UI) */}
-        {similarComplaint && (
-          <section className="bg-surface-container-high rounded-xl p-space-lg shadow-sm flex flex-col gap-space-md border border-secondary/30 animate-fade-in">
+        {/* 6. ADVANCED MULTI-FACTOR DUPLICATE COMPLAINT DETECTION ALERT */}
+        {similarComplaints.length > 0 && (
+          <section className="bg-surface-container-high rounded-xl p-space-lg shadow-md flex flex-col gap-space-md border-2 border-secondary/40 animate-fade-in">
             <div className="flex items-start justify-between gap-space-sm">
               <div className="flex items-center gap-space-xs text-on-secondary-container">
-                <span className="material-symbols-outlined text-[22px]">content_copy</span>
-                <h3 className="font-headline font-bold text-[16px]">
-                  1 Similar Existing Complaint Detected
-                </h3>
+                <span className="material-symbols-outlined text-[24px] text-secondary">content_copy</span>
+                <div>
+                  <h3 className="font-headline font-bold text-[17px] text-on-surface">
+                    {similarComplaints.length === 1
+                      ? '1 Similar Existing Complaint Detected in Database'
+                      : `${similarComplaints.length} Similar Complaints Detected in Database`}
+                  </h3>
+                  <p className="font-body text-[12px] text-on-surface-variant">
+                    Found matching civic grievance records using live GPS proximity &amp; issue categorization.
+                  </p>
+                </div>
               </div>
-              <span className="px-space-sm py-0.5 rounded-full bg-surface-container-lowest text-on-surface-variant font-body text-[11px] font-semibold">
-                {similarComplaint.matchScore}% Proximity Match
+              <span className="px-space-md py-1 rounded-full bg-secondary text-on-secondary font-body text-[12px] font-bold shadow-xs">
+                {similarComplaints[0].matchScore}% Match
               </span>
             </div>
 
-            <div className="bg-surface-container-lowest rounded-lg p-space-md flex flex-col gap-space-sm border border-surface-container">
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-space-xs flex-wrap">
-                  <span className="font-body text-[14px] text-on-surface font-bold">
-                    Issue #{similarComplaint.complaint.trackingId}:
-                  </span>
-                  <span className="font-body text-[14px] text-on-surface font-medium">
-                    {similarComplaint.complaint.title}
-                  </span>
+            {/* List all detected matches (primary + secondary) */}
+            <div className="flex flex-col gap-space-sm">
+              {similarComplaints.slice(0, 2).map((match, idx) => (
+                <div
+                  key={match.complaint.id || idx}
+                  className="bg-surface-container-lowest rounded-xl p-space-md flex flex-col gap-space-sm border border-surface-container shadow-xs"
+                >
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pb-2 border-b border-surface-container">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-headline text-[15px] font-bold text-primary">
+                        #{match.complaint.trackingId}
+                      </span>
+                      <span className="text-outline-variant">•</span>
+                      <span className="font-body text-[14px] text-on-surface font-semibold">
+                        {match.complaint.title}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {match.distanceMeters !== undefined && (
+                        <span className="px-2 py-0.5 rounded-full bg-secondary-container/80 text-on-secondary-container font-body text-[11px] font-semibold">
+                          📍 {match.distanceMeters}m away
+                        </span>
+                      )}
+                      <span
+                        className={`px-2 py-0.5 rounded-full font-body text-[11px] font-semibold ${
+                          match.complaint.status === 'Assigned'
+                            ? 'bg-primary-container text-on-primary'
+                            : match.complaint.status === 'In Progress'
+                            ? 'bg-secondary-container text-on-secondary-container'
+                            : 'bg-surface-container text-on-surface-variant'
+                        }`}
+                      >
+                        {match.complaint.status}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Thumbnail & Description & Match Reasons */}
+                  <div className="flex flex-col sm:flex-row gap-space-md items-start">
+                    {match.complaint.originalPhotoUrl && (
+                      <div className="w-20 h-20 rounded-lg overflow-hidden bg-surface-container shrink-0 border border-surface-container shadow-xs">
+                        <img
+                          src={match.complaint.originalPhotoUrl}
+                          alt="Existing complaint evidence"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    )}
+                    <div className="flex-1 text-left">
+                      <p className="font-body text-[13px] text-on-surface line-clamp-2">
+                        "{match.complaint.description}"
+                      </p>
+                      <span className="font-body text-[11px] text-on-surface-variant block mt-1">
+                        Location: {match.complaint.location.address} •{' '}
+                        <strong>{match.complaint.citizenConfirmationCount} residents confirmed</strong>
+                      </span>
+
+                      {/* Match Reasons Chips */}
+                      {match.matchReasons && match.matchReasons.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                          {match.matchReasons.map((reason, rIdx) => (
+                            <span
+                              key={rIdx}
+                              className="px-2 py-0.5 rounded-md bg-surface-container font-body text-[11px] text-on-surface-variant font-medium"
+                            >
+                              {reason}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Confirmation & Report Anyway Action Bar */}
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-space-sm pt-space-xs border-t border-surface-container mt-1">
+                    <p className="font-body text-[12px] text-on-surface-variant">
+                      💡 <strong>Recommended:</strong> Confirming boosts emergency priority without creating duplicate work tickets.
+                    </p>
+                    <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          confirmExistingIssue(match.complaint.id, 'cit-001');
+                          onSuccess(match.complaint.trackingId);
+                        }}
+                        className="w-full sm:w-auto px-space-md py-2 rounded-lg bg-secondary text-on-secondary font-body text-[13px] font-semibold hover:opacity-95 shadow-xs transition-opacity flex items-center justify-center gap-1.5"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">thumb_up</span>
+                        <span>Confirm Existing Issue</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <p className="font-body text-[12px] text-on-surface-variant">
-                  Location: {similarComplaint.complaint.location.address} • Status:{' '}
-                  <span className="text-secondary font-semibold">
-                    {similarComplaint.complaint.status}
-                  </span>{' '}
-                  • {similarComplaint.complaint.citizenConfirmationCount} residents confirmed
-                </p>
-              </div>
+              ))}
+            </div>
 
-              <p className="font-body text-[12px] text-on-surface-variant bg-surface-container-low p-space-sm rounded-lg">
-                💡 <strong>Tip:</strong> Confirming the existing issue reinforces its neighborhood priority
-                score without creating duplicate work orders for municipal workers.
-              </p>
-
-              <div className="flex flex-col sm:flex-row items-center gap-space-sm pt-space-xs">
-                <button
-                  type="button"
-                  onClick={() => {
-                    confirmExistingIssue(similarComplaint.complaint.id, 'cit-001');
-                    onSuccess(similarComplaint.complaint.trackingId);
-                  }}
-                  className="w-full sm:w-auto px-space-lg py-2 rounded-lg bg-secondary text-on-secondary font-body text-[13px] font-semibold hover:opacity-95 shadow-sm transition-opacity flex items-center justify-center gap-1.5"
-                >
-                  <span className="material-symbols-outlined text-[16px]">thumb_up</span>
-                  <span>Confirm Existing Issue</span>
-                </button>
-                <button
-                  type="submit"
-                  className="w-full sm:w-auto px-space-md py-2 rounded-lg bg-surface-container-low hover:bg-surface-container text-on-surface font-body text-[13px] font-medium transition-colors flex items-center justify-center border border-outline-variant/40"
-                >
-                  <span>Report Anyway</span>
-                </button>
-              </div>
+            <div className="flex items-center justify-between pt-1 text-[12px] text-on-surface-variant">
+              <span>Is your problem distinct from the above records?</span>
+              <button
+                type="submit"
+                className="px-space-md py-1.5 rounded-lg bg-surface-container-low hover:bg-surface-container text-on-surface font-body text-[12px] font-semibold transition-colors border border-outline-variant/40"
+              >
+                <span>Report Anyway as New Issue</span>
+              </button>
             </div>
           </section>
         )}

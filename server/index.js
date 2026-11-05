@@ -271,6 +271,100 @@ app.post('/api/evidence/submit', (req, res) => {
   });
 });
 
+// 5. Multi-Factor Proximity & Semantic Duplicate Detection Endpoint
+app.post('/api/ai/check-duplicates', (req, res) => {
+  const { description = '', category = 'Roads', coordinates, complaints = [] } = req.body;
+
+  const descLower = (description || '').toLowerCase();
+  const descTokens = descLower.split(/\W+/).filter((w) => w.length >= 3);
+  const results = [];
+
+  for (const item of complaints) {
+    if (item.status === 'Resolved') continue;
+
+    let score = 0;
+    const reasons = [];
+    let distMeters;
+
+    if (
+      coordinates &&
+      typeof coordinates.lat === 'number' &&
+      typeof coordinates.lng === 'number' &&
+      item.location &&
+      typeof item.location.latitude === 'number' &&
+      typeof item.location.longitude === 'number'
+    ) {
+      distMeters = calculateDistanceMeters(
+        coordinates.lat,
+        coordinates.lng,
+        item.location.latitude,
+        item.location.longitude
+      );
+
+      if (distMeters <= 35) {
+        score += 45;
+        reasons.push(`📍 Spot Proximity: Exact location (${distMeters}m away)`);
+      } else if (distMeters <= 100) {
+        score += 35;
+        reasons.push(`📍 Street Proximity: Same block (${distMeters}m away)`);
+      } else if (distMeters <= 250) {
+        score += 25;
+        reasons.push(`📍 Area Proximity: Nearby intersection (${distMeters}m away)`);
+      } else if (distMeters <= 600) {
+        score += 15;
+        reasons.push(`📍 Ward Proximity: Same sector (${distMeters}m away)`);
+      } else if (distMeters > 3000) {
+        score -= 15;
+      }
+    }
+
+    const itemTextLower = (
+      (item.title || '') +
+      ' ' +
+      (item.description || '') +
+      ' ' +
+      (item.location?.address || '')
+    ).toLowerCase();
+
+    if (item.category === category) {
+      score += 25;
+      reasons.push(`🏷️ Category Match: Both marked as "${category}"`);
+    }
+
+    const itemTokens = new Set(itemTextLower.split(/\W+/).filter((w) => w.length >= 3));
+    let commonCount = 0;
+    const commonWords = [];
+    for (const w of descTokens) {
+      if (itemTokens.has(w) && !commonWords.includes(w)) {
+        commonCount++;
+        commonWords.push(w);
+      }
+    }
+
+    if (commonCount > 0) {
+      score += Math.min(20, commonCount * 6);
+      reasons.push(`📝 Matching terms: ${commonWords.slice(0, 3).join(', ')}`);
+    }
+
+    if (distMeters !== undefined && distMeters <= 60 && item.category === category) {
+      score = Math.max(score, 78);
+    }
+
+    const matchScore = Math.min(98, Math.max(0, score));
+    if (matchScore >= 35) {
+      results.push({
+        complaint: item,
+        matchScore,
+        distanceMeters: distMeters,
+        matchReasons: reasons,
+      });
+    }
+  }
+
+  results.sort((a, b) => b.matchScore - a.matchScore);
+  return res.json({ duplicates: results });
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[CityResolve Server] Running on http://localhost:${PORT}`);
 });

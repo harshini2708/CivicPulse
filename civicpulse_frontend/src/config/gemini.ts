@@ -1,5 +1,8 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { AISummary, AIVerificationResult, Complaint, IssueCategory, PriorityLevel } from '../types';
+import { calculateDistanceMeters } from '../utils/helpers';
+import { db, isFirebaseConfigured } from './firebase';
+import { collection, getDocs } from 'firebase/firestore';
 
 const clientApiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
 export const isGeminiConfigured = Boolean(clientApiKey && !clientApiKey.includes('your_') && clientApiKey.length > 10);
@@ -115,40 +118,212 @@ function fallbackAnalyzeComplaint(description: string): AISummary {
   };
 }
 
+export interface DuplicateMatch {
+  complaint: Complaint;
+  matchScore: number;
+  distanceMeters?: number;
+  matchReasons: string[];
+}
+
+const DOMAIN_KEYWORDS: Record<IssueCategory, string[]> = {
+  Roads: [
+    'pothole', 'road', 'asphalt', 'crater', 'ditch', 'crack', 'pavement', 'tar',
+    'lane', 'curb', 'highway', 'street', 'driveway', 'bump', 'patch', 'surface'
+  ],
+  Garbage: [
+    'garbage', 'trash', 'waste', 'dump', 'bin', 'dumpster', 'litter', 'debris',
+    'spillover', 'rubbish', 'smell', 'odor', 'stench', 'sanitation', 'cleanliness', 'overflow'
+  ],
+  'Water Supply': [
+    'water', 'pipe', 'pipeline', 'leak', 'leakage', 'burst', 'main', 'tap',
+    'pressure', 'supply', 'valve', 'potable', 'meter', 'drinking'
+  ],
+  Drainage: [
+    'drain', 'drainage', 'sewer', 'sewage', 'manhole', 'gutter', 'flood', 'flooding',
+    'ponding', 'culvert', 'rainwater', 'clogging', 'grate', 'overflow', 'mud', 'blockage'
+  ],
+  Streetlights: [
+    'streetlight', 'street light', 'lamp', 'bulb', 'light', 'dark', 'pole',
+    'outage', 'blackout', 'illumination', 'tripped', 'circuit', 'luminaire', 'night'
+  ],
+  Other: [
+    'hazard', 'safety', 'noise', 'odor', 'tree', 'sidewalk', 'encroachment',
+    'animal', 'electric', 'wire', 'cable', 'fissure'
+  ],
+};
+
+const COMMON_STREET_NAMES = [
+  'oak', 'maple', 'elm', 'market', 'main', '4th', '5th', '8th', '9th', 'park',
+  'commercial', 'broadway', 'cross', 'church', 'avenue', 'street', 'road', 'lane'
+];
+
 /**
- * 2. Duplicate Detection Assistance
+ * 2. Multi-Factor AI & Proximity Duplicate Detection
+ * Analyzes:
+ *  - High-precision geographic proximity (Haversine formula)
+ *  - Issue category matching & cross-category domain synonyms
+ *  - Text token overlap and common street/location references
  */
 export function findSimilarComplaints(
   newDescription: string,
   newCategory: IssueCategory,
-  existingComplaints: Complaint[]
-): { complaint: Complaint; matchScore: number }[] {
-  const newWords = new Set(newDescription.toLowerCase().split(/\W+/).filter(w => w.length > 3));
-  const results: { complaint: Complaint; matchScore: number }[] = [];
+  existingComplaints: Complaint[],
+  newCoordinates?: { lat: number; lng: number }
+): DuplicateMatch[] {
+  const descLower = (newDescription || '').toLowerCase();
+  const descTokens = descLower.split(/\W+/).filter((w) => w.length >= 3);
+  const results: DuplicateMatch[] = [];
 
   for (const item of existingComplaints) {
     if (item.status === 'Resolved') continue;
 
     let score = 0;
+    const reasons: string[] = [];
+    let distMeters: number | undefined;
+
+    // 1. Geographic Proximity (Up to 45 points)
+    if (
+      newCoordinates &&
+      typeof newCoordinates.lat === 'number' &&
+      typeof newCoordinates.lng === 'number' &&
+      item.location &&
+      typeof item.location.latitude === 'number' &&
+      typeof item.location.longitude === 'number'
+    ) {
+      distMeters = calculateDistanceMeters(
+        newCoordinates.lat,
+        newCoordinates.lng,
+        item.location.latitude,
+        item.location.longitude
+      );
+
+      if (distMeters <= 35) {
+        score += 45;
+        reasons.push(`📍 Spot Proximity: Exact location (${distMeters}m away)`);
+      } else if (distMeters <= 100) {
+        score += 35;
+        reasons.push(`📍 Street Proximity: Same block (${distMeters}m away)`);
+      } else if (distMeters <= 250) {
+        score += 25;
+        reasons.push(`📍 Area Proximity: Nearby intersection (${distMeters}m away)`);
+      } else if (distMeters <= 600) {
+        score += 15;
+        reasons.push(`📍 Ward Proximity: Same sector (${distMeters}m away)`);
+      } else if (distMeters <= 1200) {
+        score += 8;
+      } else if (distMeters > 3000) {
+        score -= 15; // Distant location penalty
+      }
+    }
+
+    // 2. Category Match (Up to 25 points)
+    const itemTextLower = (
+      (item.title || '') +
+      ' ' +
+      (item.description || '') +
+      ' ' +
+      (item.location?.address || '')
+    ).toLowerCase();
+
     if (item.category === newCategory) {
-      score += 40;
+      score += 25;
+      reasons.push(`🏷️ Category Match: Both marked as "${newCategory}"`);
+    } else {
+      const targetKeywords = DOMAIN_KEYWORDS[newCategory] || [];
+      const hasCrossDomainWord = targetKeywords.some((kw) => itemTextLower.includes(kw));
+      if (hasCrossDomainWord) {
+        score += 15;
+        reasons.push(`🏷️ Cross-Category Correlation: Related to "${item.category}"`);
+      }
     }
 
-    const itemWords = item.description.toLowerCase().split(/\W+/).filter(w => w.length > 3);
+    // 3. Domain Keywords & Semantic Matching (Up to 25 points)
+    const categoryKeywords = DOMAIN_KEYWORDS[newCategory] || [];
+    const sharedDomainKeywords = categoryKeywords.filter(
+      (kw) => descLower.includes(kw) && itemTextLower.includes(kw)
+    );
+
+    if (sharedDomainKeywords.length > 0) {
+      score += Math.min(20, sharedDomainKeywords.length * 8);
+      reasons.push(`🔑 Key Hazard Terms: ${sharedDomainKeywords.slice(0, 3).join(', ')}`);
+    }
+
+    // 4. Street / Corridor Reference Matching
+    const sharedStreet = COMMON_STREET_NAMES.find(
+      (st) => st.length >= 3 && descLower.includes(st) && itemTextLower.includes(st)
+    );
+    if (sharedStreet) {
+      score += 15;
+      reasons.push(`🛣️ Same Street Reference: "${sharedStreet}"`);
+    }
+
+    // 5. Token Overlap (Jaccard similarity)
+    const itemTokens = new Set(itemTextLower.split(/\W+/).filter((w) => w.length >= 3));
     let commonWordCount = 0;
-    for (const w of itemWords) {
-      if (newWords.has(w)) commonWordCount++;
+    const commonWordsList: string[] = [];
+    for (const w of descTokens) {
+      if (itemTokens.has(w) && !commonWordsList.includes(w)) {
+        commonWordCount++;
+        commonWordsList.push(w);
+      }
     }
 
-    const textMatch = Math.min(50, commonWordCount * 12);
-    score += textMatch;
+    if (commonWordCount > 0) {
+      score += Math.min(20, commonWordCount * 6);
+      if (reasons.length < 3 && commonWordsList.length > 0) {
+        reasons.push(`📝 Matching words: ${commonWordsList.slice(0, 3).join(', ')}`);
+      }
+    }
 
-    if (score >= 50) {
-      results.push({ complaint: item, matchScore: Math.min(96, score + Math.floor(Math.random() * 5)) });
+    // Boost: If close distance (<= 60m) and category matches or hazard words match, it's very likely a duplicate!
+    if (distMeters !== undefined && distMeters <= 60 && (item.category === newCategory || sharedDomainKeywords.length > 0)) {
+      score = Math.max(score, 78);
+    } else if (distMeters !== undefined && distMeters <= 150 && item.category === newCategory) {
+      score = Math.max(score, 65);
+    }
+
+    const matchScore = Math.min(98, Math.max(0, score));
+
+    // Threshold: 35 points triggers warning
+    if (matchScore >= 35) {
+      results.push({
+        complaint: item,
+        matchScore,
+        distanceMeters: distMeters,
+        matchReasons: reasons.length > 0 ? reasons : ['Proximity & content similarity detected'],
+      });
     }
   }
 
   return results.sort((a, b) => b.matchScore - a.matchScore);
+}
+
+/**
+ * 2B. Database-Aware Duplicate Detection (Queries Firestore Database + Local State)
+ */
+export async function findSimilarComplaintsWithDb(
+  newDescription: string,
+  newCategory: IssueCategory,
+  localComplaints: Complaint[],
+  newCoordinates?: { lat: number; lng: number }
+): Promise<DuplicateMatch[]> {
+  const combined: Complaint[] = [...localComplaints];
+
+  if (isFirebaseConfigured && db) {
+    try {
+      const snap = await getDocs(collection(db, 'complaints'));
+      snap.forEach((docSnap) => {
+        const data = docSnap.data() as Complaint;
+        if (!combined.some((c) => c.id === data.id || c.trackingId === data.trackingId)) {
+          combined.push(data);
+        }
+      });
+    } catch (err) {
+      console.warn('[Deduplication] Firestore query error, using local complaints:', err);
+    }
+  }
+
+  return findSimilarComplaints(newDescription, newCategory, combined, newCoordinates);
 }
 
 /**
