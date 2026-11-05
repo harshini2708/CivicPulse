@@ -149,13 +149,12 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
             <div className="p-space-lg flex flex-col items-center text-center gap-space-sm max-w-sm">
               <span className="material-symbols-outlined text-secondary text-[36px]">videocam_off</span>
               <p className="font-body text-[13px] text-on-surface-variant">{cameraError}</p>
-              <label className="mt-2 inline-flex items-center gap-2 px-space-md py-2 rounded-lg bg-primary text-on-primary font-body text-[13px] font-semibold cursor-pointer shadow-sm hover:opacity-90">
-                <span className="material-symbols-outlined text-[18px]">add_a_photo</span>
-                <span>Capture / Select Image</span>
+              <label className="mt-2 inline-flex items-center gap-2 px-space-md py-2.5 rounded-lg bg-primary text-on-primary font-body text-[13px] font-semibold cursor-pointer shadow-sm hover:opacity-90">
+                <span className="material-symbols-outlined text-[18px]">upload_file</span>
+                <span>Select Image from PC / Mobile</span>
                 <input
                   type="file"
                   accept="image/*"
-                  capture="environment"
                   className="hidden"
                   onChange={handleFallbackFile}
                 />
@@ -218,13 +217,12 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
             </>
           ) : (
             <>
-              <label className="text-[12px] text-on-surface-variant hover:text-on-surface cursor-pointer flex items-center gap-1">
+              <label className="px-space-md py-2 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface font-body text-[12px] font-semibold cursor-pointer flex items-center gap-1.5 border border-outline-variant/30 transition-colors">
                 <span className="material-symbols-outlined text-[16px]">upload_file</span>
-                <span>Choose alternative file</span>
+                <span>Upload from Device / Gallery</span>
                 <input
                   type="file"
                   accept="image/*"
-                  capture="environment"
                   className="hidden"
                   onChange={handleFallbackFile}
                 />
@@ -233,7 +231,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
                 type="button"
                 disabled={Boolean(cameraError) || isLoading}
                 onClick={takeSnapshot}
-                className="px-space-lg py-2 rounded-lg bg-primary text-on-primary font-body text-[13px] font-semibold flex items-center gap-1.5 shadow-sm hover:opacity-95 disabled:opacity-50 transition-opacity"
+                className="px-space-lg py-2 rounded-lg bg-primary text-on-primary font-body text-[13px] font-semibold flex items-center gap-1.5 shadow-sm hover:opacity-95 disabled:opacity-50 transition-opacity cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[18px]">lens</span>
                 <span>Capture Snapshot</span>

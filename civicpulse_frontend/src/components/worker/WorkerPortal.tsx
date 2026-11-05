@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useComplaints } from '../../context/ComplaintContext';
 import { Navbar } from '../common/Navbar';
@@ -19,11 +19,29 @@ export const WorkerPortal: React.FC = () => {
   // Repair Evidence Form State
   const [repairPhoto, setRepairPhoto] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const repairFileInputRef = useRef<HTMLInputElement | null>(null);
   const [repairNotes, setRepairNotes] = useState('');
   const [workerGps, setWorkerGps] = useState<{ lat: number; lng: number } | null>(null);
   const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
   const [isLocating, setIsLocating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleRepairFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('Please select a valid image file (JPG, PNG, WebP).', 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      setRepairPhoto(dataUrl);
+      showToast(`Repair photo "${file.name}" attached successfully`, 'success');
+    };
+    reader.readAsDataURL(file);
+    if (e.target) e.target.value = '';
+  };
 
   // Complaints assigned to this worker or department
   const assignedIssues = complaints.filter(
@@ -339,44 +357,85 @@ export const WorkerPortal: React.FC = () => {
                 </select>
               </div>
 
-              {/* Mandatory Camera Capture */}
+              {/* Mandatory After-Repair Photo (Upload from PC/Mobile or Live Camera) */}
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <label className="text-[12px] font-semibold text-on-surface flex items-center gap-1">
                     <span>After-Repair Photo</span>
                     <span className="text-error font-bold">*Mandatory</span>
                   </label>
-                  <span className="text-[11px] text-on-surface-variant">Live camera verification</span>
+                  <span className="text-[11px] text-on-surface-variant">Upload or live camera verification</span>
                 </div>
+
+                {/* Hidden File Input for Worker Photo Upload */}
+                <input
+                  ref={repairFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleRepairFileUpload}
+                />
 
                 {repairPhoto ? (
                   <div className="relative rounded-xl overflow-hidden h-60 bg-surface-container border border-surface-container-high">
                     <img src={repairPhoto} alt="After repair preview" className="w-full h-full object-cover" />
-                    <button
-                      type="button"
-                      onClick={() => setIsCameraOpen(true)}
-                      className="absolute bottom-3 right-3 px-3 py-1.5 rounded-lg bg-surface-container-lowest/90 backdrop-blur-sm text-on-surface font-body text-[12px] font-semibold shadow-md flex items-center gap-1"
-                    >
-                      <span className="material-symbols-outlined text-[15px]">refresh</span>
-                      <span>Retake Camera Photo</span>
-                    </button>
+                    <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => repairFileInputRef.current?.click()}
+                        className="px-3 py-1.5 rounded-lg bg-surface-container-lowest/90 backdrop-blur-sm text-on-surface font-body text-[12px] font-semibold shadow-md flex items-center gap-1 hover:bg-surface-container transition-colors cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-[15px]">upload_file</span>
+                        <span>Upload File</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsCameraOpen(true)}
+                        className="px-3 py-1.5 rounded-lg bg-surface-container-lowest/90 backdrop-blur-sm text-on-surface font-body text-[12px] font-semibold shadow-md flex items-center gap-1 hover:bg-surface-container transition-colors cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-[15px]">photo_camera</span>
+                        <span>Camera</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRepairPhoto(null)}
+                        className="px-3 py-1.5 rounded-lg bg-error text-white font-body text-[12px] font-semibold shadow-md flex items-center gap-1 hover:opacity-90 transition-opacity cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-[15px]">delete</span>
+                        <span>Remove</span>
+                      </button>
+                    </div>
                   </div>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => setIsCameraOpen(true)}
-                    className="h-44 rounded-xl border-2 border-dashed border-outline-variant/60 bg-surface-container-low hover:bg-surface-container flex flex-col items-center justify-center gap-1.5 text-on-surface-variant transition-colors"
-                  >
+                  <div className="h-44 rounded-xl border-2 border-dashed border-outline-variant/60 bg-surface-container-low p-4 flex flex-col items-center justify-center gap-2 text-on-surface-variant">
                     <span className="material-symbols-outlined text-[32px] text-secondary">
-                      add_a_photo
+                      add_photo_alternate
                     </span>
                     <span className="font-body text-[13px] font-semibold text-on-surface">
-                      Capture After-Repair Photo
+                      Attach After-Repair Photo
                     </span>
-                    <span className="font-body text-[11px] text-on-surface-variant">
-                      Uses device camera live viewfinder
+                    <span className="font-body text-[11px] text-on-surface-variant text-center max-w-xs mb-1">
+                      Select an image from PC/Mobile gallery or activate live camera
                     </span>
-                  </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => repairFileInputRef.current?.click()}
+                        className="px-3 py-1.5 rounded-lg bg-primary text-on-primary font-body text-[12px] font-semibold flex items-center gap-1.5 shadow-sm hover:opacity-90 cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">upload_file</span>
+                        <span>Upload from PC / Mobile</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsCameraOpen(true)}
+                        className="px-3 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-body text-[12px] font-semibold flex items-center gap-1.5 border border-outline-variant/30 cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">photo_camera</span>
+                        <span>Live Camera</span>
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
 

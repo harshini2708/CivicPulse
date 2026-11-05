@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useComplaints } from '../../context/ComplaintContext';
 import { CameraCaptureModal } from '../common/CameraCaptureModal';
 import { AudioRecorder } from '../common/AudioRecorder';
@@ -33,6 +33,10 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
 
   // Form State
   const [photo, setPhoto] = useState<string | null>(null);
+  const [photoSource, setPhotoSource] = useState<'camera' | 'upload'>('upload');
+  const [photoFileName, setPhotoFileName] = useState<string>('');
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [description, setDescription] = useState('');
   const [voiceTranscript, setVoiceTranscript] = useState('');
@@ -236,6 +240,39 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
       clearTimeout(timer);
     };
   }, [description, voiceTranscript, category, coordinates.lat, coordinates.lng, photo, complaints, locationAddress]);
+
+  const handleImageFile = (file: File) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('Please select a valid image file (JPG, PNG, WebP).', 'error');
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      showToast('Image size exceeds 15MB limit. Please choose a smaller photo.', 'error');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      setPhoto(dataUrl);
+      setPhotoSource('upload');
+      setPhotoFileName(file.name);
+      showToast(`Photo "${file.name}" uploaded successfully`, 'success');
+    };
+    reader.onerror = () => {
+      showToast('Could not read image file. Please try again.', 'error');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleImageFile(file);
+    }
+    if (e.target) e.target.value = '';
+  };
 
   const handleVoiceTranscript = (text: string) => {
     setVoiceTranscript(text);
@@ -464,7 +501,7 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
           Multi-Modal Inputs (Combinable)
         </span>
 
-        {/* 1. Mandatory Photo Capture Section */}
+        {/* 1. Mandatory Photo Section: Upload from PC / Mobile or Live Camera Capture */}
         <section className="bg-surface-container-lowest rounded-xl p-space-lg shadow-sm flex flex-col gap-space-md border border-outline-variant/30">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-space-sm">
@@ -473,10 +510,10 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
               </div>
               <div>
                 <h2 className="font-headline font-semibold text-[16px] text-on-surface">
-                  Photo – Live Camera Capture <span className="text-error font-bold">*Mandatory</span>
+                  Photo Evidence <span className="text-error font-bold">*Mandatory</span>
                 </h2>
                 <p className="font-body text-[12px] text-on-surface-variant">
-                  Capture a clear live photo of the civic defect for visual AI verification.
+                  Upload an image from your PC / Mobile gallery or capture live with your camera.
                 </p>
               </div>
             </div>
@@ -487,9 +524,18 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
                   : 'bg-error-container text-on-error-container'
               }`}
             >
-              {photo ? 'Photo Attached' : 'Photo Required'}
+              {photo ? (photoSource === 'upload' ? 'File Attached' : 'Live Captured') : 'Photo Required'}
             </span>
           </div>
+
+          {/* Hidden File Input for Direct PC & Mobile Gallery Upload */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleFileInputChange}
+          />
 
           {photo ? (
             <div className="bg-surface-container-low rounded-lg p-space-md flex flex-col sm:flex-row items-center justify-between gap-space-md">
@@ -498,56 +544,105 @@ export const ReportIssue: React.FC<ReportIssueProps> = ({ onSuccess }) => {
                   <img src={photo} alt="Issue preview" className="w-full h-full object-cover" />
                 </div>
                 <div className="flex flex-col">
-                  <span className="font-body text-[13px] text-on-surface font-semibold truncate max-w-[220px]">
-                    Live Camera Capture
+                  <span className="font-body text-[13px] text-on-surface font-semibold truncate max-w-[260px]">
+                    {photoSource === 'upload' ? (photoFileName || 'Uploaded Photo File') : 'Live Camera Snapshot'}
                   </span>
                   <span className="font-body text-[11px] text-on-surface-variant">
-                    Geotagged • Ready for AI verification
+                    {photoSource === 'upload' ? 'Selected from PC / Mobile storage' : 'Geotagged via Device Camera'}
                   </span>
                   <div className="flex items-center gap-1 mt-1 text-on-tertiary-container font-body text-[11px] font-medium">
                     <span className="material-symbols-outlined text-[14px]">check_circle</span>
-                    <span>Ready for dispatch</span>
+                    <span>Ready for AI verification &amp; dispatch</span>
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-space-sm w-full sm:w-auto justify-end">
+              <div className="flex items-center gap-space-xs flex-wrap w-full sm:w-auto justify-end">
                 <button
                   type="button"
-                  onClick={() => setIsCameraOpen(true)}
-                  className="px-space-md py-1.5 rounded-lg font-body text-[13px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center gap-1 border border-outline-variant/30"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-space-md py-1.5 rounded-lg font-body text-[12px] font-semibold text-on-surface bg-surface-container hover:bg-surface-container-high transition-colors flex items-center gap-1 border border-outline-variant/30 cursor-pointer"
+                  title="Upload a different photo from PC or Mobile"
                 >
-                  <span className="material-symbols-outlined text-[16px]">refresh</span>
-                  <span>Retake</span>
+                  <span className="material-symbols-outlined text-[16px]">upload_file</span>
+                  <span>Upload File</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPhoto(null)}
-                  className="px-space-md py-1.5 rounded-lg font-body text-[13px] text-error hover:bg-error-container/30 transition-colors flex items-center gap-1"
+                  onClick={() => setIsCameraOpen(true)}
+                  className="px-space-md py-1.5 rounded-lg font-body text-[12px] font-semibold text-on-surface bg-surface-container hover:bg-surface-container-high transition-colors flex items-center gap-1 border border-outline-variant/30 cursor-pointer"
+                  title="Take new live camera snapshot"
                 >
-                  <span className="material-symbols-outlined text-[16px]">close</span>
+                  <span className="material-symbols-outlined text-[16px]">photo_camera</span>
+                  <span>Use Camera</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPhoto(null);
+                    setPhotoFileName('');
+                  }}
+                  className="px-space-md py-1.5 rounded-lg font-body text-[12px] font-semibold text-error hover:bg-error-container/30 transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[16px]">delete</span>
                   <span>Remove</span>
                 </button>
               </div>
             </div>
           ) : (
-            <div className="bg-surface-container-low/70 border-2 border-dashed border-outline-variant/60 rounded-xl p-space-lg flex flex-col items-center justify-center text-center gap-space-xs">
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDragging(true);
+              }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) handleImageFile(file);
+              }}
+              className={`border-2 border-dashed rounded-xl p-space-lg flex flex-col items-center justify-center text-center gap-space-xs transition-all ${
+                isDragging
+                  ? 'border-primary bg-primary-container/20 scale-[1.01]'
+                  : 'border-outline-variant/60 bg-surface-container-low/70 hover:bg-surface-container-low'
+              }`}
+            >
               <div className="w-12 h-12 rounded-full bg-surface-container flex items-center justify-center text-secondary mb-1">
-                <span className="material-symbols-outlined text-[28px]">add_a_photo</span>
+                <span className="material-symbols-outlined text-[28px]">
+                  {isDragging ? 'file_download' : 'add_photo_alternate'}
+                </span>
               </div>
               <p className="font-body text-[14px] font-semibold text-on-surface">
-                No photo captured yet
+                {isDragging ? 'Drop Image File Here' : 'Upload or Capture Issue Photo'}
               </p>
-              <p className="font-body text-[12px] text-on-surface-variant max-w-sm mb-2">
-                Click below to activate device camera and take an on-site photograph of the problem.
+              <p className="font-body text-[12px] text-on-surface-variant max-w-md mb-3">
+                Choose an image file from your PC or mobile gallery, or activate your device camera directly.
               </p>
-              <button
-                type="button"
-                onClick={() => setIsCameraOpen(true)}
-                className="px-space-lg py-2.5 rounded-lg bg-primary text-on-primary font-body text-[13px] font-semibold flex items-center gap-2 shadow-sm hover:opacity-90 transition-opacity"
-              >
-                <span className="material-symbols-outlined text-[18px]">photo_camera</span>
-                <span>Open Live Camera</span>
-              </button>
+
+              {/* Dual Action Buttons: Upload from Device + Open Camera */}
+              <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-full sm:w-auto px-space-lg py-2.5 rounded-lg bg-primary text-on-primary font-body text-[13px] font-semibold flex items-center justify-center gap-2 shadow-sm hover:opacity-90 active:scale-95 transition-all cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[18px]">upload_file</span>
+                  <span>Upload from PC / Mobile</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsCameraOpen(true)}
+                  className="w-full sm:w-auto px-space-lg py-2.5 rounded-lg bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-body text-[13px] font-semibold flex items-center justify-center gap-2 border border-outline-variant/40 shadow-2xs active:scale-95 transition-all cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[18px]">photo_camera</span>
+                  <span>Open Live Camera</span>
+                </button>
+              </div>
+
+              <span className="text-[11px] text-on-surface-variant mt-2">
+                Supported formats: JPG, PNG, WebP • Drag &amp; drop supported on PC
+              </span>
             </div>
           )}
         </section>
