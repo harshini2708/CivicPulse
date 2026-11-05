@@ -1,8 +1,8 @@
-// Utility functions for CivicPulse
+// Utility functions for CityResolve
 
 export function generateTrackingId(): string {
   const randomNum = Math.floor(1000 + Math.random() * 9000);
-  return `CP-2026-${randomNum}`;
+  return `CR-2026-${randomNum}`;
 }
 
 export function calculateDistanceMeters(

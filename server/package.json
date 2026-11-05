@@ -1,7 +1,7 @@
 {
-  "name": "civicpulse-backend",
+  "name": "cityresolve-backend",
   "version": "1.0.0",
-  "description": "CivicPulse Secure Server API & AI Services",
+  "description": "CityResolve Secure Server API & AI Services",
   "main": "index.js",
   "type": "module",
   "scripts": {

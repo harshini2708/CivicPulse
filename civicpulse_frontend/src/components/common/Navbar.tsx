@@ -24,7 +24,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, tabs })
             </div>
             <div className="flex flex-col">
               <span className="font-headline text-headline-sm font-bold tracking-tight text-on-surface">
-                CivicPulse
+                CityResolve
               </span>
             </div>
           </button>

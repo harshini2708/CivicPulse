@@ -1,7 +1,7 @@
-# CivicPulse (AI-Powered Municipal Grievance Management Platform)
+# CityResolve (AI-Powered Municipal Grievance Management Platform)
 
 > **"Your City. Your Voice. Better Governance."**  
-> CivicPulse is a modern full-stack web application connecting citizens, field workers, and municipal administrators with AI-assisted triage, duplicate detection, and verified evidence resolution.
+> CityResolve is a modern full-stack web application connecting citizens, field workers, and municipal administrators with AI-assisted triage, duplicate detection, and verified evidence resolution.
 
 ---
 

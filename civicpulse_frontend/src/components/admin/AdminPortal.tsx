@@ -39,7 +39,7 @@ export const AdminPortal: React.FC = () => {
                 <span className="material-symbols-outlined text-[20px]">account_balance</span>
               </div>
               <span className="font-headline text-headline-sm font-bold text-on-surface tracking-tight">
-                CivicPulse
+                CityResolve
               </span>
             </button>
             <div className="flex items-center gap-space-xs pl-space-xs">

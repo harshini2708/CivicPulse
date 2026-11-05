@@ -21,6 +21,7 @@ const allowedOrigins = [
   'http://localhost:4173',
   /^https:\/\/.*\.vercel\.app$/,   // any *.vercel.app subdomain
   /^https:\/\/civicpulse.*$/,      // custom domain if you add one later
+  /^https:\/\/cityresolve.*$/,     // custom domain if you add one later
 ];
 
 app.use(cors({
@@ -40,7 +41,7 @@ const geminiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY 
 const isGeminiLive = Boolean(geminiKey && !geminiKey.includes('your_') && geminiKey.length > 10);
 const genAI = isGeminiLive ? new GoogleGenerativeAI(geminiKey) : null;
 
-console.log(`[CivicPulse Server] Initialized. Gemini API Live: ${isGeminiLive}`);
+console.log(`[CityResolve Server] Initialized. Gemini API Live: ${isGeminiLive}`);
 
 // Utility: Haversine distance in meters
 function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
@@ -271,5 +272,5 @@ app.post('/api/evidence/submit', (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[CivicPulse Server] Running on http://localhost:${PORT}`);
+  console.log(`[CityResolve Server] Running on http://localhost:${PORT}`);
 });

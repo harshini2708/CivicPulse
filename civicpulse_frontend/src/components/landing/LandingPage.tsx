@@ -49,7 +49,7 @@ export const LandingPage: React.FC = () => {
                 <span className="material-symbols-outlined text-[20px]">account_balance</span>
               </div>
               <span className="font-headline text-headline-sm font-bold tracking-tight text-on-surface">
-                CivicPulse
+                CityResolve
               </span>
             </div>
             <div className="hidden sm:flex items-center gap-space-xs px-space-sm py-0.5 rounded-full bg-surface-container-low border border-surface-container-high">
@@ -108,7 +108,7 @@ export const LandingPage: React.FC = () => {
 
             {/* Narrative */}
             <p className="relative z-10 max-w-2xl font-body text-[16px] text-on-surface-variant leading-relaxed mb-space-lg">
-              CivicPulse connects residents, municipal workers, and city administration with AI-powered grievance
+              CityResolve connects residents, municipal workers, and city administration with AI-powered grievance
               triage, duplicate grouping, field evidence verification, and transparent complaint tracking.
             </p>
 
@@ -311,7 +311,7 @@ export const LandingPage: React.FC = () => {
                   required
                   value={workerEmail}
                   onChange={(e) => setWorkerEmail(e.target.value)}
-                  placeholder="worker@civicpulse.in"
+                  placeholder="worker@cityresolve.in"
                   className="w-full h-10 px-3 bg-surface-container-low rounded-lg text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-secondary/40 border border-outline-variant/30"
                 />
               </div>
@@ -365,7 +365,7 @@ export const LandingPage: React.FC = () => {
                   required
                   value={adminEmail}
                   onChange={(e) => setAdminEmail(e.target.value)}
-                  placeholder="admin@civicpulse.in"
+                  placeholder="admin@cityresolve.in"
                   className="w-full h-10 px-3 bg-surface-container-low rounded-lg text-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-secondary/40 border border-outline-variant/30"
                 />
               </div>
@@ -399,7 +399,7 @@ export const LandingPage: React.FC = () => {
       <footer className="w-full bg-surface-container-lowest/90 border-t border-surface-container py-space-md mt-auto">
         <div className="max-w-[1340px] mx-auto px-margin flex flex-col sm:flex-row items-center justify-between gap-space-md text-center sm:text-left">
           <div className="flex items-center gap-2">
-            <span className="font-headline text-headline-sm font-bold text-on-surface">CivicPulse</span>
+            <span className="font-headline text-headline-sm font-bold text-on-surface">CityResolve</span>
             <span className="text-on-surface-variant text-xs">• Municipal Democratic Platform</span>
           </div>
           <p className="font-body text-[12px] text-on-surface-variant">

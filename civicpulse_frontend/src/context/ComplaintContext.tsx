@@ -60,8 +60,8 @@ interface ComplaintContextType {
 
 const ComplaintContext = createContext<ComplaintContextType | undefined>(undefined);
 
-const STORAGE_KEY = 'civicpulse_complaints_v1';
-const HISTORY_STORAGE_KEY = 'civicpulse_history_v1';
+const STORAGE_KEY = 'cityresolve_complaints_v1';
+const HISTORY_STORAGE_KEY = 'cityresolve_history_v1';
 
 export const ComplaintProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [complaints, setComplaints] = useState<Complaint[]>(() => {

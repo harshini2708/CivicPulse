@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: civicpulse-backend
+    name: cityresolve-backend
     runtime: node
     rootDir: server
     buildCommand: npm install

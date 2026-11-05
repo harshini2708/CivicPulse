@@ -13,14 +13,14 @@ export const mockUsers: Record<string, UserProfile> = {
   citizen: {
     uid: 'cit-001',
     name: 'Resident (You)',
-    email: 'resident@civicpulse.org',
+    email: 'resident@cityresolve.org',
     role: 'citizen',
     accountStatus: 'active',
   },
   worker: {
     uid: 'wrk-104',
     name: 'Field Crew Unit #14 (D. Vance)',
-    email: 'worker14@civicpulse.gov',
+    email: 'worker14@cityresolve.gov',
     role: 'worker',
     workerId: 'WRK-14',
     departmentId: 'drainage',
@@ -30,7 +30,7 @@ export const mockUsers: Record<string, UserProfile> = {
   admin: {
     uid: 'adm-882',
     name: 'Officer Marcus Vance',
-    email: 'officer882@civicpulse.gov',
+    email: 'officer882@cityresolve.gov',
     role: 'admin',
     accountStatus: 'active',
   },

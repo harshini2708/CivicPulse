@@ -26,9 +26,9 @@ try {
   auth    = getAuth(app);
   db      = getFirestore(app);
   storage = getStorage(app);
-  console.info('[CivicPulse] ✅ Firebase connected → project: civicpulse-90ad0');
+  console.info('[CityResolve] ✅ Firebase connected → project: civicpulse-90ad0');
 } catch (err) {
-  console.warn('[CivicPulse] Firebase init error — running in Demo Mode:', err);
+  console.warn('[CityResolve] Firebase init error — running in Demo Mode:', err);
 }
 
 export { app, auth, db, storage };
